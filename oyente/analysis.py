@@ -163,6 +163,7 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
 
 def update_analysis(analysis, opcode, stack, mem, global_state, path_conditions_and_vars, solver):
     gas_increment, gas_memory = calculate_gas(opcode, stack, mem, global_state, analysis, solver)
+    #print(">", opcode, "=", gas_increment)
     analysis["gas"] += gas_increment
     analysis["gas_mem"] = gas_memory
 

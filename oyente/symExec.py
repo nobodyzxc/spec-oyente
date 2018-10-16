@@ -1,3 +1,5 @@
+from draw_cfg import *
+
 import tokenize
 import zlib, base64
 from tokenize import NUMBER, NAME, NEWLINE
@@ -22,6 +24,10 @@ from test_evm.global_test_params import (TIME_OUT, UNKNOWN_INSTRUCTION,
                                          EXCEPTION, PICKLE_PATH)
 from vulnerability import CallStack, TimeDependency, MoneyConcurrency, Reentrancy, AssertionFailure, ParityMultisigBug2, IntegerUnderflow, IntegerOverflow
 import global_params
+
+max_gas = 0
+longest_path = []
+current_path = []
 
 log = logging.getLogger(__name__)
 
@@ -229,9 +235,13 @@ def build_cfg_and_analyze():
 
 
 def print_cfg():
-    for block in vertices.values():
-        block.display()
-    log.debug(str(edges))
+    create_graph(
+            cfg_nodes(vertices.values()),
+            cfg_edges(edges, longest_path))
+    #for block in vertices.values():
+    #    block.display()
+    print(str(edges))
+    print(longest_path)
 
 
 def mapping_push_instruction(current_line_content, current_ins_address, idx, positions, length):
@@ -557,7 +567,6 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
     global all_gs
     global results
     global g_src_map
-
     visited = params.visited
     stack = params.stack
     mem = params.mem
@@ -569,12 +578,18 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
     calls = params.calls
     overflow_pcs = params.overflow_pcs
 
+
     Edge = namedtuple("Edge", ["v1", "v2"]) # Factory Function for tuples is used as dictionary key
     if block < 0:
         log.debug("UNKNOWN JUMP ADDRESS. TERMINATING THIS PATH")
         return ["ERROR"]
 
-    log.debug("Reach block address %d \n", block)
+    print("Reach block address %d, d = %d" % (block, depth))
+    print("previous gas", analysis["gas"])
+    global max_gas
+    global current_path
+    global longest_path
+    current_path.append(block)
 
     if g_src_map:
         if block in start_block_to_func_sig:
@@ -594,11 +609,20 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
 
     if visited_edges[current_edge] > global_params.LOOP_LIMIT:
         log.debug("Overcome a number of loop limit. Terminating this path ...")
+        current_path.pop()
         return stack
 
     current_gas_used = analysis["gas"]
+    
+    if current_gas_used > max_gas:
+        max_gas = current_gas_used
+        longest_path = current_path.copy()
+        print(longest_path)
+    #max_gas = max(max_gas, current_gas_used)
+
     if current_gas_used > global_params.GAS_LIMIT:
         log.debug("Run out of gas. Terminating this path ... ")
+        current_path.pop()
         return stack
 
     # Execute every instruction, one at a time
@@ -606,11 +630,13 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         block_ins = vertices[block].get_instructions()
     except KeyError:
         log.debug("This path results in an exception, possibly an invalid jump address")
+        current_path.pop()
         return ["ERROR"]
 
     for instr in block_ins:
         sym_exec_ins(params, block, instr, func_call, current_func_name)
 
+    print("current gas", analysis["gas"], "\n")
     # Mark that this basic block in the visited blocks
     visited.append(block)
     depth += 1
@@ -657,12 +683,16 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
             source_code = g_src_map.get_source_code(global_state['pc'])
             if source_code in g_src_map.func_call_names:
                 func_call = global_state['pc']
+        #print("execute jump")
         sym_exec_block(new_params, successor, block, depth, func_call, current_func_name)
+        #print("execute jump return")
     elif jump_type[block] == "falls_to":  # just follow to the next basic block
         successor = vertices[block].get_falls_to()
         new_params = params.copy()
         new_params.global_state["pc"] = successor
+        #print("follw next block")
         sym_exec_block(new_params, successor, block, depth, func_call, current_func_name)
+        #print("follw next block return")
     elif jump_type[block] == "conditional":  # executing "JUMPI"
 
         # A choice point, we proceed with depth first search
@@ -684,7 +714,9 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
                 new_params.path_conditions_and_vars["path_condition"].append(branch_expression)
                 last_idx = len(new_params.path_conditions_and_vars["path_condition"]) - 1
                 new_params.analysis["time_dependency_bug"][last_idx] = global_state["pc"]
+                #print("execute JUMPI LEFT")
                 sym_exec_block(new_params, left_branch, block, depth, func_call, current_func_name)
+                #print("execute JUMPI return")
         except TimeoutError:
             raise
         except Exception as e:
@@ -712,7 +744,9 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
                 new_params.path_conditions_and_vars["path_condition"].append(negated_branch_expression)
                 last_idx = len(new_params.path_conditions_and_vars["path_condition"]) - 1
                 new_params.analysis["time_dependency_bug"][last_idx] = global_state["pc"]
+                #print("execute JUMPI LEFT")
                 sym_exec_block(new_params, right_branch, block, depth, func_call, current_func_name)
+                #print("execute JUMPI return")
         except TimeoutError:
             raise
         except Exception as e:
@@ -726,6 +760,7 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         visited_edges.update({current_edge: updated_count_number})
         raise Exception('Unknown Jump-Type')
 
+    current_path.pop()
 
 # Symbolically executing an instruction
 def sym_exec_ins(params, block, instr, func_call, current_func_name):
