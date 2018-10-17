@@ -19,17 +19,13 @@ def add_edges(graph, edges):
     return graph
 
 def create_graph(n, e, filename):
-    # print('[INFO] Constructing visualizing graph')
     digraph = functools.partial(gv.Digraph, format='svg')
     g = add_edges(add_nodes(digraph(), n), e)
-    #filename = 'img/{}/g{}'.format(row_id, row_id)
-    g.render(filename=filename)
-    # print('[COMPLETE - CFG construction]')
-
+    g.render(filename=filename, cleanup=True)
     return g
 
 def cfg_nodes(blocks, lgp, show_cond):
-    color = lambda tag, cover: '#f4f141' if tag in lgp else ('' if cover else '#41f4e5')
+    color = lambda tag, cover: '#f4f141' if tag in lgp else ('' if cover else '#ffffff')
     return [(str(block.start), \
              { 'label' : \
                  'start: ' + str(block.start) + '\n' +
@@ -51,11 +47,3 @@ def cfg_edges(es, lgp):
             {'label' : '',
              'color': 'red' if (b, e) in les else 'blue'
             }) for (b, e) in es]
-    #edges = []
-    #for k in es:
-    #    for nxt in es[k]:
-    #        edges.append(
-    #                ((str(k), str(nxt)),
-    #                    {'label' : '',
-    #                        'color': 'blue'}))
-    #return edges
