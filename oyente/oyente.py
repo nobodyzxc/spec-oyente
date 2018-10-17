@@ -152,6 +152,7 @@ def main():
     parser.add_argument( "-ce",  "--compilation-error",      help="Display compilation errors", action="store_true")
     parser.add_argument( "-gtc", "--generate-test-cases",    help="Generate test cases each branch of symbolic execution tree", action="store_true")
     parser.add_argument( "-sjo", "--standard-json-output",   help="Support Standard JSON output", action="store_true")
+    parser.add_argument( "-cfg", "--control-flow-graph",   help="Generate control flow graph", dest="cfg", action="store_true")
 
     args = parser.parse_args()
 
@@ -215,13 +216,13 @@ def main():
         exit_code = analyze_solidity(input_type='standard_json_output')
     else:
         exit_code = analyze_solidity()
-
-    print("```")
     print("max gas: ", symExec.max_gas)
-    symExec.print_cfg()
+    if args.cfg:
+        symExec.print_cfg(
+                args.source[:args.source.find('.')],
+                args.paths)
     exit(exit_code)
 
 if __name__ == '__main__':
-    print("```")
     main()
 

@@ -234,14 +234,22 @@ def build_cfg_and_analyze():
         full_sym_exec()  # jump targets are constructed on the fly
 
 
-def print_cfg():
+def print_cfg(filename, show_path_cond):
+    acc_gas = 0
+    for lid in longest_path:
+        acc_gas += vertices[lid].gas
+        vertices[lid].acc_gas = acc_gas
+
     create_graph(
-            cfg_nodes(vertices.values()),
-            cfg_edges(edges, longest_path))
+            cfg_nodes(vertices.values(),
+                      longest_path,
+                      show_path_cond),
+            cfg_edges(edges, longest_path),
+            filename)
     #for block in vertices.values():
     #    block.display()
-    print(str(edges))
-    print(longest_path)
+    #print(str(edges))
+    #print(longest_path)
 
 
 def mapping_push_instruction(current_line_content, current_ins_address, idx, positions, length):
@@ -584,8 +592,8 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         log.debug("UNKNOWN JUMP ADDRESS. TERMINATING THIS PATH")
         return ["ERROR"]
 
-    print("Reach block address %d, d = %d" % (block, depth))
-    print("previous gas", analysis["gas"])
+    ##print("Reach block address %d, d = %d" % (block, depth))
+    ##print("previous gas", analysis["gas"])
     global max_gas
     global current_path
     global longest_path
@@ -613,11 +621,11 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         return stack
 
     current_gas_used = analysis["gas"]
-    
+
     if current_gas_used > max_gas:
         max_gas = current_gas_used
         longest_path = current_path.copy()
-        print(longest_path)
+        #print(longest_path)
     #max_gas = max(max_gas, current_gas_used)
 
     if current_gas_used > global_params.GAS_LIMIT:
@@ -633,10 +641,20 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         current_path.pop()
         return ["ERROR"]
 
+    prev_block_gas = current_gas_used
+
+    prev_gas = current_gas_used
+
     for instr in block_ins:
         sym_exec_ins(params, block, instr, func_call, current_func_name)
+        vertices[block].inst_gas.append(
+                instr + ' : ' +  \
+                        str(analysis["gas"] - prev_gas))
+        prev_gas = analysis["gas"]
 
-    print("current gas", analysis["gas"], "\n")
+    ##print("current gas", analysis["gas"], "\n")
+    vertices[block].gas = analysis["gas"] - prev_block_gas
+
     # Mark that this basic block in the visited blocks
     visited.append(block)
     depth += 1
@@ -646,6 +664,10 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         global_problematic_pcs["money_concurrency_bug"].append(analysis["money_concurrency_bug"])
         money_flow_all_paths.append(analysis["money_flow"])
         path_conditions.append(path_conditions_and_vars["path_condition"])
+
+        vertices[block].path_cond = str(path_conditions_and_vars["path_condition"])
+        # block path cond
+
         global_problematic_pcs["time_dependency_bug"].append(analysis["time_dependency_bug"])
         all_gs.append(copy_global_values(global_state))
 

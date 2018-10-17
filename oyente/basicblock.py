@@ -6,6 +6,10 @@ class BasicBlock:
         self.end = end_address
         self.instructions = []  # each instruction is a string
         self.jump_target = 0
+        self.gas = 0
+        self.acc_gas = 0
+        self.path_cond = []
+        self.inst_gas = []
 
     def get_start_address(self):
         return self.start
