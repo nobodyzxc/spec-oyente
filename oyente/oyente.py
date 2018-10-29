@@ -70,7 +70,7 @@ def analyze_bytecode():
     helper = InputHelper(InputHelper.BYTECODE, source=args.source,evm=args.evm)
     inp = helper.get_inputs()[0]
 
-    result, exit_code = symExec.run(disasm_file=inp['disasm_file'])
+    result, exit_code = symExec.run(inp['contract'], args, disasm_file=inp['disasm_file'])
     helper.rm_tmp_files()
 
     if global_params.WEB:
@@ -79,12 +79,13 @@ def analyze_bytecode():
     return exit_code
 
 def run_solidity_analysis(inputs):
+    global args
     results = {}
     exit_code = 0
 
     for inp in inputs:
         logging.info("contract %s:", inp['contract'])
-        result, return_code = symExec.run(disasm_file=inp['disasm_file'], source_map=inp['source_map'], source_file=inp['source'])
+        result, return_code = symExec.run(inp['contract'], args, disasm_file=inp['disasm_file'], source_map=inp['source_map'], source_file=inp['source'])
 
         try:
             c_source = inp['c_source']
@@ -216,11 +217,6 @@ def main():
         exit_code = analyze_solidity(input_type='standard_json_output')
     else:
         exit_code = analyze_solidity()
-    print("max gas: ", symExec.max_gas)
-    if args.cfg:
-        symExec.print_cfg(
-                args.source[:args.source.find('.')],
-                args.paths)
     exit(exit_code)
 
 if __name__ == '__main__':

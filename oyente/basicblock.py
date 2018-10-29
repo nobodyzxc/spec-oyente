@@ -10,6 +10,7 @@ class BasicBlock:
         self.acc_gas = 0
         self.path_cond = []
         self.inst_gas = []
+        self.addrs = []
 
     def get_start_address(self):
         return self.start

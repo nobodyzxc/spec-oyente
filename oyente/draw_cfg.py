@@ -25,25 +25,45 @@ def create_graph(n, e, filename):
     return g
 
 def cfg_nodes(blocks, lgp, show_cond):
-    color = lambda tag, cover: '#f4f141' if tag in lgp else ('' if cover else '#ffffff')
+    color = lambda tag, cover: \
+            ['#ffffff', '', '#f4f141'][min((tag in lgp) * 2 + bool(cover), 2)]
+    cond = lambda show, cond: ('\n' + '=' * 40 + '\n') + \
+            ('\n' + '=' * 40 + '\n').join(cond) if cond and show else ''
+    acc_gas = lambda g: 'acc_gas : ' + str(g) + '\n' if g else ''
+    gas = lambda block_gas, inst_gas: '\nblock gas : ' + str(block_gas) + '\n' if inst_gas else ''
+
+    insts = lambda inst_g, inst: inst_g if inst_g else inst
+    # addIdx = lambda inst, addrs: '\n'.join(inst)
+    notaddIdx = lambda inst, addrs: \
+            '\n'.join(["%s" % inst \
+            for (idx,inst) in zip(addrs, inst)]) \
+            if len(inst) == len(addrs) else '\n'.join(inst)
+    addIdx = lambda inst, addrs: \
+            '\n'.join(["%d:%s" % (idx, inst) \
+            for (idx,inst) in zip(addrs, inst)]) \
+            if len(inst) == len(addrs) else '\n'.join(inst)
+
     return [(str(block.start), \
              { 'label' : \
-                 'start: ' + str(block.start) + '\n' +
-                 ('\n'.join(block.inst_gas) if block.inst_gas \
-                         else '\n'.join(block.instructions)) +
-                 '\nend : ' + str(block.end) + '\n' + \
-                 ('gas : ' + str(block.gas) + '\n' if block.inst_gas else '') + \
-                 ('acc_gas : ' + str(block.acc_gas) + '\n' if block.acc_gas else '') + \
-                 ('constraints : ' + block.path_cond if block.path_cond and show_cond else ''), \
+                 """ addrs : (%s, %s)\n\n%s\n%s%s%s """ % (
+                    block.start,
+                    block.end,
+                    notaddIdx(insts(block.inst_gas, block.instructions), block.addrs),
+                    gas(block.gas, block.inst_gas),
+                    acc_gas(block.acc_gas),
+                    cond(show_cond, block.path_cond)),
                 'shape': 'box', \
                 'style': 'filled', \
                 'fillcolor': color(block.start, block.inst_gas),
              }) for block in blocks]
 
-def cfg_edges(es, lgp):
+def cfg_edges(es, lgp, p_cond, show_cond):
+
+    print("edges:", es)
     les = list(zip(lgp[:-1], lgp[1:]))
     es = [(b, e) for b in es for e in es[b]]
     return [((str(b), str(e)),
-            {'label' : '',
+            {'label' : ('\n' + '=' * 40 + '\n').join(p_cond.get((b, e), [])) \
+                    if show_cond else '',
              'color': 'red' if (b, e) in les else 'blue'
             }) for (b, e) in es]

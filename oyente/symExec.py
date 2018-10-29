@@ -25,10 +25,6 @@ from test_evm.global_test_params import (TIME_OUT, UNKNOWN_INSTRUCTION,
 from vulnerability import CallStack, TimeDependency, MoneyConcurrency, Reentrancy, AssertionFailure, ParityMultisigBug2, IntegerUnderflow, IntegerOverflow
 import global_params
 
-max_gas = 0
-longest_path = []
-current_path = []
-
 log = logging.getLogger(__name__)
 
 UNSIGNED_BOUND_NUMBER = 2**256 - 1
@@ -59,7 +55,33 @@ class Parameter:
         _kwargs = custom_deepcopy(self.__dict__)
         return Parameter(**_kwargs)
 
+def add_cfg_constraints(start, end, cons):
+    global cfg_path_constraints
+
+    l = cfg_path_constraints.get((start, end), [])
+
+    cond = "constraints{} : \n{}".format(str(len(l) + 1), ',\n'.join(map(str, cons)))
+
+    if (start, end) in cfg_path_constraints:
+        cfg_path_constraints[(start, end)].append(cond)
+    else:
+        cfg_path_constraints[(start, end)] = [cond]
+
 def initGlobalVars():
+
+    # cfg vars
+    global max_gas
+    max_gas = 0
+
+    global longest_path
+    longest_path = []
+
+    global current_path
+    current_path = []
+
+    global cfg_path_constraints
+    cfg_path_constraints = {}
+
     global g_src_map
     global solver
     # Z3 solver
@@ -236,6 +258,8 @@ def build_cfg_and_analyze():
 
 def print_cfg(filename, show_path_cond):
     acc_gas = 0
+    #print(longest_path)
+    #print([i for i in vertices])
     for lid in longest_path:
         acc_gas += vertices[lid].gas
         vertices[lid].acc_gas = acc_gas
@@ -244,13 +268,15 @@ def print_cfg(filename, show_path_cond):
             cfg_nodes(vertices.values(),
                       longest_path,
                       show_path_cond),
-            cfg_edges(edges, longest_path),
+            cfg_edges(edges, longest_path,
+                      cfg_path_constraints,
+                      show_path_cond),
             filename)
     #for block in vertices.values():
     #    block.display()
     #print(str(edges))
     #print(longest_path)
-
+    print("max gas: ", max_gas)
 
 def mapping_push_instruction(current_line_content, current_ins_address, idx, positions, length):
     global g_src_map
@@ -406,14 +432,15 @@ def construct_bb():
         if key not in instructions:
             continue
         block.add_instruction(instructions[key])
+        block.addrs.append(sorted_addresses.index(key))
         i = sorted_addresses.index(key) + 1
         while i < size and sorted_addresses[i] <= end_address:
+            block.addrs.append(sorted_addresses[i])
             block.add_instruction(instructions[sorted_addresses[i]])
             i += 1
         block.set_block_type(jump_type[key])
         vertices[key] = block
         edges[key] = []
-
 
 def construct_static_edges():
     add_falls_to()  # these edges are static
@@ -562,8 +589,10 @@ def full_sym_exec():
     params = Parameter(path_conditions_and_vars=path_conditions_and_vars, global_state=global_state, analysis=analysis)
     if g_src_map:
         start_block_to_func_sig = get_start_block_to_func_sig()
-    return sym_exec_block(params, 0, 0, 0, -1, 'fallback')
-
+    # modify here
+    ret = sym_exec_block(params, 0, 0, 0, -1, 'fallback')
+    current_path.pop()
+    return ret
 
 # Symbolically executing a block from the start address
 def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name):
@@ -575,6 +604,11 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
     global all_gs
     global results
     global g_src_map
+
+    global max_gas
+    global current_path
+    global longest_path
+
     visited = params.visited
     stack = params.stack
     mem = params.mem
@@ -586,18 +620,15 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
     calls = params.calls
     overflow_pcs = params.overflow_pcs
 
-
     Edge = namedtuple("Edge", ["v1", "v2"]) # Factory Function for tuples is used as dictionary key
+
+    # print("current block : ", block)
+    current_path.append(block)
+    # print("path : ", current_path)
+
     if block < 0:
         log.debug("UNKNOWN JUMP ADDRESS. TERMINATING THIS PATH")
         return ["ERROR"]
-
-    ##print("Reach block address %d, d = %d" % (block, depth))
-    ##print("previous gas", analysis["gas"])
-    global max_gas
-    global current_path
-    global longest_path
-    current_path.append(block)
 
     if g_src_map:
         if block in start_block_to_func_sig:
@@ -617,7 +648,6 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
 
     if visited_edges[current_edge] > global_params.LOOP_LIMIT:
         log.debug("Overcome a number of loop limit. Terminating this path ...")
-        current_path.pop()
         return stack
 
     current_gas_used = analysis["gas"]
@@ -630,7 +660,6 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
 
     if current_gas_used > global_params.GAS_LIMIT:
         log.debug("Run out of gas. Terminating this path ... ")
-        current_path.pop()
         return stack
 
     # Execute every instruction, one at a time
@@ -638,22 +667,27 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         block_ins = vertices[block].get_instructions()
     except KeyError:
         log.debug("This path results in an exception, possibly an invalid jump address")
-        current_path.pop()
         return ["ERROR"]
 
     prev_block_gas = current_gas_used
 
     prev_gas = current_gas_used
 
+    record = vertices[block].inst_gas == []
+
     for instr in block_ins:
         sym_exec_ins(params, block, instr, func_call, current_func_name)
-        vertices[block].inst_gas.append(
-                instr + ' : ' +  \
-                        str(analysis["gas"] - prev_gas))
+        if record:
+            vertices[block].inst_gas.append(
+                    instr + ' : ' +  \
+                            str(analysis["gas"] - prev_gas))
         prev_gas = analysis["gas"]
 
-    ##print("current gas", analysis["gas"], "\n")
     vertices[block].gas = analysis["gas"] - prev_block_gas
+
+    # # add block path cond here
+    # vertices[block].path_cond = str(params.path_conditions_and_vars["path_condition"])
+
 
     # Mark that this basic block in the visited blocks
     visited.append(block)
@@ -665,14 +699,18 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         money_flow_all_paths.append(analysis["money_flow"])
         path_conditions.append(path_conditions_and_vars["path_condition"])
 
-        vertices[block].path_cond = str(path_conditions_and_vars["path_condition"])
-        # block path cond
 
         global_problematic_pcs["time_dependency_bug"].append(analysis["time_dependency_bug"])
         all_gs.append(copy_global_values(global_state))
 
     # Go to next Basic Block(s)
     if jump_type[block] == "terminal" or depth > global_params.DEPTH_LIMIT:
+
+        vertices[block].path_cond.append(
+                "block_constraints{}:\n{}".format(
+                len(vertices[block].path_cond) + 1,
+                ',\n'.join(map(str, params.path_conditions_and_vars["path_condition"]))))
+
         global total_no_of_paths
         global no_of_test_cases
 
@@ -701,19 +739,33 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         successor = vertices[block].get_jump_target()
         new_params = params.copy()
         new_params.global_state["pc"] = successor
+
         if g_src_map:
             source_code = g_src_map.get_source_code(global_state['pc'])
             if source_code in g_src_map.func_call_names:
                 func_call = global_state['pc']
+
+        add_cfg_constraints(block, successor,
+                params.path_conditions_and_vars["path_condition"])
+
         #print("execute jump")
         sym_exec_block(new_params, successor, block, depth, func_call, current_func_name)
+        # print("pop : ", current_path[-1])
+        current_path.pop()
         #print("execute jump return")
     elif jump_type[block] == "falls_to":  # just follow to the next basic block
         successor = vertices[block].get_falls_to()
         new_params = params.copy()
         new_params.global_state["pc"] = successor
+
+
+        add_cfg_constraints(block, successor,
+                params.path_conditions_and_vars["path_condition"])
+
         #print("follw next block")
         sym_exec_block(new_params, successor, block, depth, func_call, current_func_name)
+        # print("pop : ", current_path[-1])
+        current_path.pop()
         #print("follw next block return")
     elif jump_type[block] == "conditional":  # executing "JUMPI"
 
@@ -726,6 +778,7 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         solver.push()  # SET A BOUNDARY FOR SOLVER
         solver.add(branch_expression)
 
+        in_dfs = False
         try:
             if solver.check() == unsat:
                 log.debug("INFEASIBLE PATH DETECTED")
@@ -737,13 +790,28 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
                 last_idx = len(new_params.path_conditions_and_vars["path_condition"]) - 1
                 new_params.analysis["time_dependency_bug"][last_idx] = global_state["pc"]
                 #print("execute JUMPI LEFT")
+                in_dfs = True
+
+                add_cfg_constraints(block, left_branch,
+                        new_params.path_conditions_and_vars["path_condition"])
+
                 sym_exec_block(new_params, left_branch, block, depth, func_call, current_func_name)
                 #print("execute JUMPI return")
         except TimeoutError:
+            print("error1", block)
             raise
         except Exception as e:
+            print("error2", block)
             if global_params.DEBUG_MODE:
                 traceback.print_exc()
+        finally:
+            if in_dfs:
+                # print("on block : ", block)
+                # print("pop : ", current_path[-1])
+                while current_path[-1] != block:
+                    current_path.pop()
+                in_dfs = False
+
 
         solver.pop()  # POP SOLVER CONTEXT
 
@@ -753,6 +821,7 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
 
         log.debug("Negated branch expression: " + str(negated_branch_expression))
 
+        in_dfs = False
         try:
             if solver.check() == unsat:
                 # Note that this check can be optimized. I.e. if the previous check succeeds,
@@ -764,16 +833,32 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
                 new_params = params.copy()
                 new_params.global_state["pc"] = right_branch
                 new_params.path_conditions_and_vars["path_condition"].append(negated_branch_expression)
+
+
                 last_idx = len(new_params.path_conditions_and_vars["path_condition"]) - 1
                 new_params.analysis["time_dependency_bug"][last_idx] = global_state["pc"]
                 #print("execute JUMPI LEFT")
+                in_dfs = True
+
+
+                add_cfg_constraints(block, right_branch,
+                        new_params.path_conditions_and_vars["path_condition"])
+
                 sym_exec_block(new_params, right_branch, block, depth, func_call, current_func_name)
                 #print("execute JUMPI return")
         except TimeoutError:
+            print("error3", block)
             raise
         except Exception as e:
+            print("error4", block)
             if global_params.DEBUG_MODE:
                 traceback.print_exc()
+        finally:
+            if in_dfs:
+                while current_path[-1] != block:
+                    current_path.pop()
+                in_dfs = False
+
         solver.pop()  # POP SOLVER CONTEXT
         updated_count_number = visited_edges[current_edge] - 1
         visited_edges.update({current_edge: updated_count_number})
@@ -781,8 +866,6 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         updated_count_number = visited_edges[current_edge] - 1
         visited_edges.update({current_edge: updated_count_number})
         raise Exception('Unknown Jump-Type')
-
-    current_path.pop()
 
 # Symbolically executing an instruction
 def sym_exec_ins(params, block, instr, func_call, current_func_name):
@@ -2422,6 +2505,7 @@ def closing_message():
             of.write(json.dumps(results, indent=1))
         log.info("Wrote results to %s.", result_file)
 
+
 class TimeoutError(Exception):
     pass
 
@@ -2496,11 +2580,14 @@ def analyze():
 
     run_build_cfg_and_analyze(timeout_cb=timeout_cb)
 
-def run(disasm_file=None, source_file=None, source_map=None):
+def run(name, args, disasm_file=None, source_file=None, source_map=None):
     global g_disasm_file
     global g_source_file
     global g_src_map
     global results
+    global max_gas
+    global longest_path
+    global current_path
 
     g_disasm_file = disasm_file
     g_source_file = source_file
@@ -2514,4 +2601,14 @@ def run(disasm_file=None, source_file=None, source_map=None):
         analyze()
         ret = detect_vulnerabilities()
         closing_message()
+        name = name.replace(".sol", '_').replace(':', "")
+        name = name[name.rfind('/') + 1:]
+        input(">>>>>>>>> cfg %s generation <<<<<<<<<<" % name)
+        print_cfg(
+                name,
+                args.paths)
+        print(longest_path)
+        max_gas = 0
+        longest_path = []
+        current_path = []
         return ret
