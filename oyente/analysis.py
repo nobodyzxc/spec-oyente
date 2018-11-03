@@ -24,7 +24,8 @@ def init_analysis():
         "money_flow": [("Is", "Ia", "Iv")],  # (source, destination, amount)
         "reentrancy_bug":[],
         "money_concurrency_bug": [],
-        "time_dependency_bug": {}
+        "time_dependency_bug": {},
+        "gas_constraints": []
     }
     return analysis
 
@@ -73,6 +74,7 @@ def check_reentrancy_bug(path_conditions_and_vars, stack, global_state):
     return ret_val
 
 def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
+    gas_constraints = ""
     gas_increment = get_ins_cost(opcode) # base cost
     gas_memory = analysis["gas_mem"]
     # In some opcodes, gas cost is not only depend on opcode itself but also current state of evm
@@ -80,15 +82,37 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
     if opcode in ("LOG0", "LOG1", "LOG2", "LOG3", "LOG4") and len(stack) > 1:
         if isReal(stack[1]):
             gas_increment += GCOST["Glogdata"] * stack[1]
+        elif isinstance(stack[1], BitVecRef):
+            gas_constraints = "{} * {}".format(GCOST["Gexpbyte"], str(stack[1]))
+        else:
+            print("unknown type on LOG", type(stack[1]))
+            exit(0)
     elif opcode == "EXP" and len(stack) > 1:
-        if isReal(stack[1]) and stack[1] > 0:
-            gas_increment += GCOST["Gexpbyte"] * (1 + math.floor(math.log(stack[1], 256)))
+        if isReal(stack[1]):
+            if stack[1] > 0:
+                # EXP ESTIMATION HERE
+                gas_increment += GCOST["Gexpbyte"] * (1 + math.floor(math.log(stack[1], 256)))
+        elif isinstance(stack[1], BitVecRef):
+            gas_constraints = "{} > 0 ? {} * (1 + floor(log({}, 256)))".format(str(stack[1]), GCOST["Gexpbyte"], str(stack[1]))
+        else:
+            print("unknown type on EXP", type(stack[1]))
+            exit(0)
     elif opcode == "EXTCODECOPY" and len(stack) > 2:
         if isReal(stack[2]):
             gas_increment += GCOST["Gcopy"] * math.ceil(stack[2] / 32)
+        elif isinstance(stack[2], BitVecRef):
+            gas_constraints = "{} * ceil({} / 32)".format(GCOST["Gcopy"], str(stack[2]))
+        else:
+            print("unknown type on EXTCODECOPY", type(stack[2]))
+            exit(0)
     elif opcode in ("CALLDATACOPY", "CODECOPY") and len(stack) > 3:
         if isReal(stack[3]):
             gas_increment += GCOST["Gcopy"] * math.ceil(stack[3] / 32)
+        elif isinstance(stack[3], BitVecRef):
+            gas_constraints = "{} * ceil({} / 32)".format(GCOST["Gcopy"], str(stack[3]))
+        else:
+            print("unknown type on EXTCODECOPY", type(stack[3]))
+            exit(0)
     elif opcode == "SSTORE" and len(stack) > 1:
         if isReal(stack[1]):
             try:
@@ -107,6 +131,8 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
                 elif stack[1] == 0:
                     gas_increment += GCOST["Gsreset"]
         else:
+            #print("SSOTRE WITH ", stack[0], stack[1])
+            #input("any key to continue(not real) >> ")
             try:
                 try:
                     storage_value = global_state["Ia"][int(stack[0])]
@@ -114,20 +140,35 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
                     storage_value = global_state["Ia"][str(stack[0])]
                 solver.push()
                 solver.add(Not( And(storage_value == 0, stack[1] != 0) ))
+                gas_constraints = "!({} == 0 \n&& {} != 0)\n? {} : {})".format(
+                        str(storage_value), str(stack[1]),
+                        str(GCOST["Gsreset"]), str(GCOST["Gsset"]))
                 if solver.check() == unsat:
                     gas_increment += GCOST["Gsset"]
-                else:
+                    gas_constraints += "{unsat}".format(GCOST["Gsset"])
+                elif solver.check() == sat:
+                    # print(solver)
+                    # print("solver.check() == ", solver.check())
                     gas_increment += GCOST["Gsreset"]
+                    gas_constraints += str(solver.model()).replace("[", "{\n").replace("]", "}").replace("=", ":")
+                else:
+                    solver.model()
                 solver.pop()
             except Exception as e:
+                #print("cancled", e)
+                #input(">>>>>>>>>>>>>>>>>>>")
                 if str(e) == "canceled":
                     solver.pop()
                 solver.push()
                 solver.add(Not( stack[1] != 0 ))
+                gas_constraints = "!({} != 0) ? {} : {}".format(
+                        str(stack[1]), GCOST["Gsreset"], GCOST["Gsset"])
                 if solver.check() == unsat:
                     gas_increment += GCOST["Gsset"]
+                    gas_constraints += "{unsat}".format(GCOST["Gsset"])
                 else:
                     gas_increment += GCOST["Gsreset"]
+                    gas_constraints += str(solver.model()).replace("[", "{\n").replace("]", "}").replace("=", ":")
                 solver.pop()
     elif opcode == "SUICIDE" and len(stack) > 1:
         if isReal(stack[1]):
@@ -147,11 +188,27 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
         else:
             solver.push()
             solver.add(Not (stack[2] != 0))
+
+            gas_constraints = "!({} != 0) ? 0 : {}".format(
+                    str(stack[2]), GCOST["Gcallvalue"])
+
             if check_sat(solver) == unsat:
                 gas_increment += GCOST["Gcallvalue"]
+                gas_constraints += "{unsat}".format(GCOST["Gsset"])
+            else:
+                gas_constraints += str(solver.model()).replace("[", "{\n").replace("]", "}").replace("=", ":")
+
             solver.pop()
-    elif opcode == "SHA3" and isReal(stack[1]):
-        pass # Not handle
+
+    elif opcode == "SHA3":
+        # pass # Not handle / try to handle
+        if isReal(stack[1]):
+            gas_increment += GCOST["Gsha3"] + GCOST["Gsha3word"] * math.ceil(s[1] / 32)
+        elif isinstance(stack[1], BitVecRef):
+            gas_constraints = "{} + {} * ceil({} / 32)".format(GCOST["Gsha3"], GCOST["Gsha3word"], str(stack[1]))
+        else:
+            print("unknown type on SHA3", type(stack[1]))
+            exit(0)
 
 
     #Calculate gas memory, add it to total gas used
@@ -159,13 +216,15 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
     new_gas_memory = GCOST["Gmemory"] * length + (length ** 2) // 512
     gas_increment += new_gas_memory - gas_memory
 
-    return (gas_increment, new_gas_memory)
+    return (gas_increment, new_gas_memory, gas_constraints)
 
 def update_analysis(analysis, opcode, stack, mem, global_state, path_conditions_and_vars, solver):
-    gas_increment, gas_memory = calculate_gas(opcode, stack, mem, global_state, analysis, solver)
-    #print(">", opcode, "=", gas_increment)
+    gas_increment, gas_memory, gas_constraints = calculate_gas(opcode, stack, mem, global_state, analysis, solver)
+    
     analysis["gas"] += gas_increment
     analysis["gas_mem"] = gas_memory
+    if gas_constraints:
+        analysis["gas_constraints"].append(gas_constraints)
 
     if opcode == "CALL":
         recipient = stack[1]

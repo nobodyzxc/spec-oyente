@@ -11,6 +11,8 @@ class BasicBlock:
         self.path_cond = []
         self.inst_gas = []
         self.addrs = []
+        self.gas_constraints = []
+        self.acc_gas_constraints = ""
 
     def get_start_address(self):
         return self.start

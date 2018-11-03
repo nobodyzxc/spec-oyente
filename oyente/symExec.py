@@ -258,11 +258,15 @@ def build_cfg_and_analyze():
 
 def print_cfg(filename, show_path_cond):
     acc_gas = 0
+    acc_cons = ""
     #print(longest_path)
     #print([i for i in vertices])
     for lid in longest_path:
         acc_gas += vertices[lid].gas
-        vertices[lid].acc_gas = acc_gas
+        if vertices[lid].gas_constraints:
+            acc_cons += '\n + '.join(vertices[lid].gas_constraints[0])
+        vertices[lid].acc_gas = str(acc_gas) + (' + gas_constraints' if acc_cons else '')
+        vertices[lid].acc_gas_constraints = acc_cons
 
     create_graph(
             cfg_nodes(vertices.values(),
@@ -684,6 +688,11 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         prev_gas = analysis["gas"]
 
     vertices[block].gas = analysis["gas"] - prev_block_gas
+    if(analysis["gas_constraints"]):
+        vertices[block].gas_constraints.append(
+                analysis["gas_constraints"].copy())
+        analysis["gas_constraints"].clear()
+
 
     # # add block path cond here
     # vertices[block].path_cond = str(params.path_conditions_and_vars["path_condition"])
