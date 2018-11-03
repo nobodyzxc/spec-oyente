@@ -53,7 +53,7 @@ def cfg_nodes(blocks, lgp, show_cond):
                     notaddIdx(insts(block.inst_gas,
                                     block.instructions),
                               block.addrs),
-                    "stack sum: " + str(sum_stack(block.instructions)),
+                    "stack sum: " + str(block.stksum),
                     gas(block.gas, block.inst_gas),
                     acc_gas(block.acc_gas),
                     cond(show_cond, ["gas_constraints{}:\n{}".format(i + 1, '\n'.join(v))\
@@ -68,17 +68,9 @@ def cfg_nodes(blocks, lgp, show_cond):
                 'fillcolor': color(block.start, block.inst_gas),
              }) for block in blocks]
 
-def sum_stack(insts):
-    try:
-        return sum(map(lambda ins:stack_v[ins][2] - stack_v[ins][1],
-            map(lambda ins: ins.split()[0], insts)))
-    except:
-        print("error", insts)
-        exit(0)
-
 def cfg_edges(es, lgp, p_cond, show_cond):
 
-    print("edges:", es)
+    # print("edges:", es)
     les = list(zip(lgp[:-1], lgp[1:]))
     es = [(b, e) for b in es for e in es[b]]
     return [((str(b), str(e)),

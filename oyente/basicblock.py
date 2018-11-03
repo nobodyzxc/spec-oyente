@@ -13,6 +13,7 @@ class BasicBlock:
         self.addrs = []
         self.gas_constraints = []
         self.acc_gas_constraints = ""
+        self.stksum = 0
 
     def get_start_address(self):
         return self.start

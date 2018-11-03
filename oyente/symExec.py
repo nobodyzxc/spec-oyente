@@ -1,5 +1,6 @@
 from draw_cfg import *
-
+from functools import reduce
+from opcodes import stack_v
 import tokenize
 import zlib, base64
 from tokenize import NUMBER, NAME, NEWLINE
@@ -75,6 +76,9 @@ def initGlobalVars():
 
     global longest_path
     longest_path = []
+
+    global all_path
+    all_path = []
 
     global current_path
     current_path = []
@@ -276,11 +280,32 @@ def print_cfg(filename, show_path_cond):
                       cfg_path_constraints,
                       show_path_cond),
             filename)
+
+    print("block number:", len(vertices.values()))
+    print("instruction count:", sum([len(b.instructions) for b in vertices.values()]))
+    print("max cost gas:", vertices[longest_path[-1]].acc_gas)
+    print("max cost path:", longest_path)
+    for p in all_path:
+        bp = [vertices[idx] for idx in p]
+        print("=" * 40)
+        print("path:", p)
+        sp = [b.stksum for b in bp]
+        print("stack sum (max, min, avg):", (max(sp), min(sp), sum(sp) / len(sp)))
+        es = list(zip(p[:-1], p[1:]))
+        print("path constraints:", bp[-1].path_cond)
+        gp = [b.gas for b in bp]
+        print("gas:", sum(gp), end = '')
+        gc = reduce(lambda x, y: x + y, [b.gas_constraints for b in bp])
+        if not gc: print("")
+        else:
+            print(" + gas constraints")
+            print("gas constraints:", gc)
+
+
     #for block in vertices.values():
     #    block.display()
     #print(str(edges))
     #print(longest_path)
-    print("max gas: ", max_gas)
 
 def mapping_push_instruction(current_line_content, current_ins_address, idx, positions, length):
     global g_src_map
@@ -445,6 +470,16 @@ def construct_bb():
         block.set_block_type(jump_type[key])
         vertices[key] = block
         edges[key] = []
+        # add code below
+        block.stksum = sum_stack(block.instructions)
+
+def sum_stack(insts):
+    try:
+        return sum(map(lambda ins:stack_v[ins][2] - stack_v[ins][1],
+            map(lambda ins: ins.split()[0], insts)))
+    except:
+        print("error", insts)
+        exit(0)
 
 def construct_static_edges():
     add_falls_to()  # these edges are static
@@ -656,12 +691,6 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
 
     current_gas_used = analysis["gas"]
 
-    if current_gas_used > max_gas:
-        max_gas = current_gas_used
-        longest_path = current_path.copy()
-        #print(longest_path)
-    #max_gas = max(max_gas, current_gas_used)
-
     if current_gas_used > global_params.GAS_LIMIT:
         log.debug("Run out of gas. Terminating this path ... ")
         return stack
@@ -688,6 +717,14 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         prev_gas = analysis["gas"]
 
     vertices[block].gas = analysis["gas"] - prev_block_gas
+
+    if analysis["gas"] > max_gas:
+        max_gas = analysis["gas"]
+        longest_path = current_path.copy()
+
+    if vertices[block].type == "terminal":
+        all_path.append(current_path.copy())
+
     if(analysis["gas_constraints"]):
         vertices[block].gas_constraints.append(
                 analysis["gas_constraints"].copy())
@@ -807,10 +844,10 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
                 sym_exec_block(new_params, left_branch, block, depth, func_call, current_func_name)
                 #print("execute JUMPI return")
         except TimeoutError:
-            print("error1", block)
+            #print("error1", block)
             raise
         except Exception as e:
-            print("error2", block)
+            #print("error2", block)
             if global_params.DEBUG_MODE:
                 traceback.print_exc()
         finally:
@@ -856,10 +893,10 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
                 sym_exec_block(new_params, right_branch, block, depth, func_call, current_func_name)
                 #print("execute JUMPI return")
         except TimeoutError:
-            print("error3", block)
+            #print("error3", block)
             raise
         except Exception as e:
-            print("error4", block)
+            #print("error4", block)
             if global_params.DEBUG_MODE:
                 traceback.print_exc()
         finally:
@@ -2596,6 +2633,7 @@ def run(name, args, disasm_file=None, source_file=None, source_map=None):
     global results
     global max_gas
     global longest_path
+    global all_path
     global current_path
 
     g_disasm_file = disasm_file
@@ -2612,12 +2650,7 @@ def run(name, args, disasm_file=None, source_file=None, source_map=None):
         closing_message()
         name = name.replace(".sol", '_').replace(':', "")
         name = name[name.rfind('/') + 1:]
-        input(">>>>>>>>> cfg %s generation <<<<<<<<<<" % name)
         print_cfg(
                 name,
                 args.paths)
-        print(longest_path)
-        max_gas = 0
-        longest_path = []
-        current_path = []
         return ret
