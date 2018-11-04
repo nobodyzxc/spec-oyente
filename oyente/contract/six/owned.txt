@@ -1,0 +1,125 @@
+WARNING:root:You are using evm version 1.8.15. The supported version is 1.7.3
+INFO:root:contract ./owned.sol:Owned:
+INFO:symExec:	============ Results ===========
+INFO:symExec:	  EVM Code Coverage: 			 99.7%
+INFO:symExec:	  Integer Underflow: 			 False
+INFO:symExec:	  Integer Overflow: 			 False
+INFO:symExec:	  Parity Multisig Bug 2: 		 False
+INFO:symExec:	  Callstack Depth Attack Vulnerability:  False
+INFO:symExec:	  Transaction-Ordering Dependence (TOD): False
+INFO:symExec:ALL PATH CONDITIONS
+INFO:symExec:PATH 1: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia]
+INFO:symExec:	  Timestamp Dependency: 		 False
+INFO:symExec:	  Re-Entrancy Vulnerability: 		 False
+INFO:symExec:	====== Analysis Completed ======
+block number: 31
+instruction count: 360
+path count: 12
+max cost gas: 12290 + gas_constraints
+max cost path: [0, 13, 103, 115, 367, 459, 124]
+========================================
+path: [0, 98]
+stack sum (max, min, avg): (0, 0, 0.0)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, If(ULE(4, Id_size), 0, 1) != 0]
+gas: 40
+========================================
+path: [0, 13, 103, 115, 367, 459, 124]
+stack sum (max, min, avg): (1, -1, 0.14285714285714285)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0, If(Iv == 0, 1, 0) != 0, If(Extract(159, 0, Is) ==
+   Extract(159, 0, Ia_store-1-newOwner),
+   1,
+   0) !=
+0]
+gas: 12290 + gas constraints
+gas constraints: !(Ia_store-0-owner == 0 
+&& Concat(Extract(255, 160, Ia_store-0-owner),
+       Extract(159, 0, Ia_store-1-newOwner)) != 0)
+? 5000 : 20000){
+Iv : 0,
+ Ia_store-0-owner : 1,
+ Ia_store-1-newOwner : 0,
+ Id_size : 57896044618658097711785492504343953926634992332820282019728792003956564819968,
+ Id_1 : 55059044443283702463324320493339087092216481002364619407536350093263669035008,
+ Is : 0}!(Ia_store-1-newOwner == 0 
+&& Concat(Extract(255, 160, Ia_store-1-newOwner), 0) != 0)
+? 5000 : 20000){
+Ia_store-1-newOwner : 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+ Is : 1461501637330902918203684832716283019655932542975,
+ Id_1 : 55059044443283702463324320493339087092216481002364619407536350093263669035008,
+ Id_size : 4,
+ Iv : 0}
+========================================
+path: [0, 13, 103, 115, 367, 455]
+stack sum (max, min, avg): (1, 0, 0.3333333333333333)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0, If(Iv == 0, 1, 0) != 0, Not(If(Extract(159, 0, Is) ==
+       Extract(159, 0, Ia_store-1-newOwner),
+       1,
+       0) !=
+    0)]
+gas: 249
+========================================
+path: [0, 13, 103, 111]
+stack sum (max, min, avg): (1, 0, 0.5)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0, Not(If(Iv == 0, 1, 0) != 0)]
+gas: 106
+========================================
+path: [0, 13, 65, 126, 138, 782, 147]
+stack sum (max, min, avg): (1, -1, 0.2857142857142857)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0, If(Iv == 0, 1, 0) != 0]
+gas: 305
+========================================
+path: [0, 13, 65, 126, 134]
+stack sum (max, min, avg): (1, 0, 0.4)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0, Not(If(Iv == 0, 1, 0) != 0)]
+gas: 128
+========================================
+path: [0, 13, 65, 76, 213, 225, 819, 234]
+stack sum (max, min, avg): (1, -1, 0.25)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), If(Extract(255, 224, Id_1) == 3572374928, 1, 0) != 0, If(Iv == 0, 1, 0) != 0]
+gas: 327
+========================================
+path: [0, 13, 65, 76, 213, 221]
+stack sum (max, min, avg): (1, 0, 0.3333333333333333)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), If(Extract(255, 224, Id_1) == 3572374928, 1, 0) != 0, Not(If(Iv == 0, 1, 0) != 0)]
+gas: 150
+========================================
+path: [0, 13, 65, 76, 87, 300, 312, 857, 948, 365]
+stack sum (max, min, avg): (1, -2, 0.1)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 3572374928, 1, 0) != 0), If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0, If(Iv == 0, 1, 0) != 0, If(Extract(159, 0, Is) == Extract(159, 0, Ia_store-0-owner),
+   1,
+   0) !=
+0]
+gas: 5500 + gas constraints
+gas constraints: !(Ia_store-1-newOwner == 0 
+&& Concat(Extract(255, 160, Ia_store-1-newOwner),
+       Extract(159, 0, _newOwner)) != 0)
+? 5000 : 20000){
+Ia_store-1-newOwner : 115792089237316195423570985008687907853269984665639945069437941317775680077823,
+ _newOwner : 0,
+ Ia_store-0-owner : 0,
+ Is : 0,
+ Id_1 : 109908292108392705413647700182009080257555005842447634700842110517808040247296,
+ Id_size : 4,
+ Iv : 0}
+========================================
+path: [0, 13, 65, 76, 87, 300, 312, 857, 944]
+stack sum (max, min, avg): (1, 0, 0.3333333333333333)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 3572374928, 1, 0) != 0), If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0, If(Iv == 0, 1, 0) != 0, Not(If(Extract(159, 0, Is) ==
+       Extract(159, 0, Ia_store-0-owner),
+       1,
+       0) !=
+    0)]
+gas: 377
+========================================
+path: [0, 13, 65, 76, 87, 300, 308]
+stack sum (max, min, avg): (1, 0, 0.2857142857142857)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 3572374928, 1, 0) != 0), If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0, Not(If(Iv == 0, 1, 0) != 0)]
+gas: 172
+========================================
+path: [0, 13, 65, 76, 87, 98]
+stack sum (max, min, avg): (1, 0, 0.16666666666666666)
+path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2042253463, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 3572374928, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0)]
+gas: 151
+
+-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-
+

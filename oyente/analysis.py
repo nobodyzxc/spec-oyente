@@ -145,30 +145,31 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
                         str(GCOST["Gsreset"]), str(GCOST["Gsset"]))
                 if solver.check() == unsat:
                     gas_increment += GCOST["Gsset"]
-                    gas_constraints += "{unsat}".format(GCOST["Gsset"])
+                    gas_constraints += "{unsat}"
                 elif solver.check() == sat:
-                    # print(solver)
-                    # print("solver.check() == ", solver.check())
                     gas_increment += GCOST["Gsreset"]
                     gas_constraints += str(solver.model()).replace("[", "{\n").replace("]", "}").replace("=", ":")
-                else:
-                    solver.model()
+                else:# check == unknown
+                    gas_increment += GCOST["Gsreset"]
+                    gas_constraints += "{unknown}"
                 solver.pop()
             except Exception as e:
-                #print("cancled", e)
-                #input(">>>>>>>>>>>>>>>>>>>")
                 if str(e) == "canceled":
                     solver.pop()
                 solver.push()
                 solver.add(Not( stack[1] != 0 ))
                 gas_constraints = "!({} != 0) ? {} : {}".format(
                         str(stack[1]), GCOST["Gsreset"], GCOST["Gsset"])
-                if solver.check() == unsat:
+                state = solver.check()
+                if state == unsat:
                     gas_increment += GCOST["Gsset"]
-                    gas_constraints += "{unsat}".format(GCOST["Gsset"])
-                else:
+                    gas_constraints += "{unsat}"
+                elif state == sat:
                     gas_increment += GCOST["Gsreset"]
                     gas_constraints += str(solver.model()).replace("[", "{\n").replace("]", "}").replace("=", ":")
+                else: # known
+                    gas_increment += GCOST["Gsreset"]
+                    gas_constraints += "{unknown}"
                 solver.pop()
     elif opcode == "SUICIDE" and len(stack) > 1:
         if isReal(stack[1]):
@@ -192,18 +193,21 @@ def calculate_gas(opcode, stack, mem, global_state, analysis, solver):
             gas_constraints = "!({} != 0) ? 0 : {}".format(
                     str(stack[2]), GCOST["Gcallvalue"])
 
-            if check_sat(solver) == unsat:
+            state = check_sat(solver)
+            if state == unsat:
                 gas_increment += GCOST["Gcallvalue"]
-                gas_constraints += "{unsat}".format(GCOST["Gsset"])
-            else:
+                gas_constraints += "{unsat}"
+            elif state == sat:
                 gas_constraints += str(solver.model()).replace("[", "{\n").replace("]", "}").replace("=", ":")
+            else: # unknown
+                gas_constraints += "{unknown}"
 
             solver.pop()
 
     elif opcode == "SHA3":
         # pass # Not handle / try to handle
         if isReal(stack[1]):
-            gas_increment += GCOST["Gsha3"] + GCOST["Gsha3word"] * math.ceil(s[1] / 32)
+            gas_increment += GCOST["Gsha3"] + GCOST["Gsha3word"] * math.ceil(stack[1] / 32)
         elif isinstance(stack[1], BitVecRef):
             gas_constraints = "{} + {} * ceil({} / 32)".format(GCOST["Gsha3"], GCOST["Gsha3word"], str(stack[1]))
         else:

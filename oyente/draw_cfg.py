@@ -31,9 +31,7 @@ def cfg_nodes(blocks, lgp, show_cond):
     cond = lambda show, cons: ('\n' + '=' * 40 + '\n') + \
             ('\n' + '=' * 40 + '\n').join(cons) if cons and show else ''
     acc_gas = lambda g: 'accumulated gas : ' + str(g) + '\n\n' if g else ''
-    gas = lambda block_gas, inst_gas: '\nblock gas : ' + str(block_gas) + '\n' if inst_gas else ''
 
-    insts = lambda inst_g, inst: inst_g if inst_g else inst
     # addIdx = lambda inst, addrs: '\n'.join(inst)
     notaddIdx = lambda inst, addrs: \
             '\n'.join(["%s" % inst \
@@ -44,35 +42,45 @@ def cfg_nodes(blocks, lgp, show_cond):
             for (idx,inst) in zip(addrs, inst)]) \
             if len(inst) == len(addrs) else '\n'.join(inst)
 
+    #print([b for b in blocks if b.start == 3241][0].path_cond)
+    #print("k" * 40)
+    #print(cond(show_cond, ["block_constraints{}:\n{}".format(i + 1, ',\n'.join(map(str, v))) for i, v in enumerate([b for b in blocks if b.start == 3241][0].path_cond.values())]))
+    #input("stop")
+
     return [(str(block.start), \
              { 'label' : \
-                 """%s\naddrs : (%s, %s)\n\n%s\n\n%s\n%s%s%s%s%s""" % (
+                 """%s\naddrs : (%s, %s)\n\n%s\n\n%s\n%s\n%s%s%s%s""" % (
                     block.type,
                     block.start,
                     block.end,
-                    notaddIdx(insts(block.inst_gas,
-                                    block.instructions),
+                    notaddIdx(block.instructions,
                               block.addrs),
                     "stack sum: " + str(block.stksum),
-                    gas(block.gas, block.inst_gas),
+                    'block gas : ' + str(block.gas),
                     acc_gas(block.acc_gas),
                     cond(show_cond, ["gas_constraints{}:\n{}".format(i + 1, '\n'.join(v))\
                             for i, v in enumerate(block.gas_constraints)]),
                     '\n' + '=' * 40 + "\nacc_gas_constraints:\n" + \
                     block.acc_gas_constraints \
                     if block.acc_gas_constraints else '',
-                    cond(show_cond, block.path_cond)
+                    cond(show_cond,
+                        ["block_constraints{}:\n{}".format(
+                            i + 1,
+                            ',\n'.join(map(str, v)))
+                                for i, v in enumerate(block.path_cond.values())])
                     ),
                 'shape': 'box', \
                 'style': 'filled', \
-                'fillcolor': color(block.start, block.inst_gas),
+                'fillcolor': color(block.start, block.visited),
              }) for block in blocks]
 
 def cfg_edges(es, lgp, p_cond, show_cond):
+    # print(es[3241])
+    # input("cfg stop")
 
-    # print("edges:", es)
     les = list(zip(lgp[:-1], lgp[1:]))
     es = [(b, e) for b in es for e in es[b]]
+
     return [((str(b), str(e)),
             {'label' : ('\n' + '=' * 40 + '\n').join(p_cond.get((b, e), [])) \
                     if show_cond else '',

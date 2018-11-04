@@ -8,12 +8,13 @@ class BasicBlock:
         self.jump_target = 0
         self.gas = 0
         self.acc_gas = 0
-        self.path_cond = []
-        self.inst_gas = []
+        self.path_cond = {}
+        # self.inst_gas = []
         self.addrs = []
         self.gas_constraints = []
         self.acc_gas_constraints = ""
         self.stksum = 0
+        self.visited = False
 
     def get_start_address(self):
         return self.start
