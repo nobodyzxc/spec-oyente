@@ -15,45 +15,75 @@ INFO:symExec:	====== Analysis Completed ======
 block number: 17
 instruction count: 230
 path count: 7
-max cost gas: 7091 + gas_constraints
+max cost gas: 7091
 max cost path: [0, 13, 65, 168, 180, 272, 469, 233]
+path stack sum (max, min, avg): (3, 0, 1.5714285714285714)
 ========================================
 path: [0, 76]
-stack sum (max, min, avg): (0, 0, 0.0)
-path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, If(ULE(4, Id_size), 0, 1) != 0]
+stack sum: 0
+path constraints:
+[0 <= Iv, init_Is >= Iv, 0 <= init_Ia, If(ULE(4, Id_size), 0, 1) != 0]
 gas: 40
 ========================================
 path: [0, 13, 81, 93, 235, 102]
-stack sum (max, min, avg): (1, -1, 0.3333333333333333)
-path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0, If(Iv == 0, 1, 0) != 0]
+stack sum: 2
+path constraints:
+[0 <= Iv,
+ init_Is >= Iv,
+ 0 <= init_Ia,
+ Not(If(ULE(4, Id_size), 0, 1) != 0),
+ If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0,
+ If(Iv == 0, 1, 0) != 0]
 gas: 283
 ========================================
 path: [0, 13, 81, 89]
-stack sum (max, min, avg): (1, 0, 0.5)
-path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0, Not(If(Iv == 0, 1, 0) != 0)]
+stack sum: 2
+path constraints:
+[0 <= Iv,
+ init_Is >= Iv,
+ 0 <= init_Ia,
+ Not(If(ULE(4, Id_size), 0, 1) != 0),
+ If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0,
+ Not(If(Iv == 0, 1, 0) != 0)]
 gas: 106
 ========================================
 path: [0, 13, 65, 168, 180, 272, 469, 233]
-stack sum (max, min, avg): (1, -2, 0.125)
-path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0, If(Iv == 0, 1, 0) != 0, If(Extract(159, 0, newOwner) ==
+stack sum: 1
+path constraints:
+[0 <= Iv,
+ init_Is >= Iv,
+ 0 <= init_Ia,
+ Not(If(ULE(4, Id_size), 0, 1) != 0),
+ Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0),
+ If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0,
+ If(Iv == 0, 1, 0) != 0,
+ If(Extract(159, 0, newOwner) ==
    Extract(159, 0, Ia_store-0-owner),
    0,
    1) !=
 0]
-gas: 7091 + gas constraints
-gas constraints: !(Ia_store-0-owner == 0 
+gas: 7091 with gas assignment
+gas assignments:
+ 5000(Gsreset):(!(Ia_store-0-owner == 0 
 && Concat(Extract(255, 160, Ia_store-0-owner),
        Extract(159, 0, newOwner)) != 0)
-? 5000 : 20000){
-Ia_store-0-owner : 1461501637330902918203684832716283019655932542975,
+? 5000 : 20000)){Ia_store-0-owner : 1461501637330902918203684832716283019655932542975,
  newOwner : 0,
  Id_1 : 109908292108392705413647700182009080257555005842447634700842110517808040247296,
  Id_size : 4,
  Iv : 0}
 ========================================
 path: [0, 13, 65, 168, 180, 272, 360]
-stack sum (max, min, avg): (1, 0, 0.42857142857142855)
-path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0, If(Iv == 0, 1, 0) != 0, Not(If(Extract(159, 0, newOwner) ==
+stack sum: 3
+path constraints:
+[0 <= Iv,
+ init_Is >= Iv,
+ 0 <= init_Ia,
+ Not(If(ULE(4, Id_size), 0, 1) != 0),
+ Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0),
+ If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0,
+ If(Iv == 0, 1, 0) != 0,
+ Not(If(Extract(159, 0, newOwner) ==
        Extract(159, 0, Ia_store-0-owner),
        0,
        1) !=
@@ -61,13 +91,26 @@ path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size),
 gas: 451
 ========================================
 path: [0, 13, 65, 168, 176]
-stack sum (max, min, avg): (1, 0, 0.4)
-path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0, Not(If(Iv == 0, 1, 0) != 0)]
+stack sum: 2
+path constraints:
+[0 <= Iv,
+ init_Is >= Iv,
+ 0 <= init_Ia,
+ Not(If(ULE(4, Id_size), 0, 1) != 0),
+ Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0),
+ If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0,
+ Not(If(Iv == 0, 1, 0) != 0)]
 gas: 128
 ========================================
 path: [0, 13, 65, 76]
-stack sum (max, min, avg): (1, 0, 0.25)
-path constraints: [0 <= Iv, init_Is >= Iv, 0 <= init_Ia, Not(If(ULE(4, Id_size), 0, 1) != 0), Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0), Not(If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0)]
+stack sum: 1
+path constraints:
+[0 <= Iv,
+ init_Is >= Iv,
+ 0 <= init_Ia,
+ Not(If(ULE(4, Id_size), 0, 1) != 0),
+ Not(If(Extract(255, 224, Id_1) == 2376452955, 1, 0) != 0),
+ Not(If(Extract(255, 224, Id_1) == 4076725131, 1, 0) != 0)]
 gas: 107
 
 -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-

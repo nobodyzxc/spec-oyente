@@ -1,4 +1,5 @@
 from draw_cfg import *
+import pprint
 from functools import reduce
 from opcodes import stack_v
 import tokenize
@@ -261,16 +262,17 @@ def build_cfg_and_analyze():
 
 
 def print_cfg(filename, show_path_cond):
-    acc_gas = 0
-    acc_cons = ""
+    # acc_gas = 0
+    # acc_cons = ""
     #print(longest_path)
     #print([i for i in vertices])
-    for lid in longest_path:
-        acc_gas += vertices[lid].gas
-        if vertices[lid].gas_constraints:
-            acc_cons += '\n + '.join(vertices[lid].gas_constraints[0])
-        vertices[lid].acc_gas = str(acc_gas) + (' + gas_constraints' if acc_cons else '')
-        vertices[lid].acc_gas_constraints = acc_cons
+    # for lid in longest_path:
+        # acc_gas += vertices[lid].gas
+        # if vertices[lid].gas_constraints:
+        #     acc_cons += '\n + '.join(vertices[lid].gas_constraints[0])
+        # vertices[lid].acc_gas = str(acc_gas)
+        # + (' + gas_constraints' if acc_cons else '')
+        # vertices[lid].acc_gas_constraints = acc_cons
 
     create_graph(
             cfg_nodes(vertices.values(),
@@ -286,24 +288,31 @@ def print_cfg(filename, show_path_cond):
     eprint("block number:", len(vertices.values()))
     eprint("instruction count:", sum([len(b.instructions) for b in vertices.values()]))
     eprint("path count:", len(all_path))
-    eprint("max cost gas:", vertices[longest_path[-1]].acc_gas)
+    eprint("max cost gas:", vertices[longest_path[-1]].acc_gas[tuple(longest_path)])
     eprint("max cost path:", longest_path)
+    ostksum = [sum([vertices[b].stksum for b in p]) for p in all_path]
+    eprint("path stack sum (max, min, avg):",
+            (max(ostksum), min(ostksum), sum(ostksum) / len(all_path)))
+
     for p in all_path:
         bp = [vertices[idx] for idx in p]
         eprint("=" * 40)
         eprint("path:", p)
-        sp = [b.stksum for b in bp]
-        eprint("stack sum (max, min, avg):", (max(sp), min(sp), sum(sp) / len(sp)))
+        eprint("stack sum:", sum([b.stksum for b in bp]))
         es = list(zip(p[:-1], p[1:]))
-        eprint("path constraints:", bp[-1].path_cond[tuple(p)])
+        eprint("path constraints:")
+        eprint(pprint.pformat(bp[-1].path_cond[tuple(p)]))
         gp = [b.gas for b in bp]
-        eprint("gas:", sum(gp), end = '')
-        gc = '\n'.join([''.join([''.join(c) for c in b.gas_constraints]) for b in bp]).strip()
+        step_path = [tuple(p[:i + 1]) for i in range(len(p))]
+        eprint("gas:", bp[-1].acc_gas[tuple(p)], end = '')
+        gc = [b.gas_constraints for b in bp]
+        cons = reduce(lambda a, b:a + b,
+                [g[p] for p, g in zip(step_path, gc) if p in g], [])
+        gc = '\n'.join(cons)
         if not gc: eprint("")
         else:
-            eprint(" + gas constraints")
-            eprint("gas constraints:", gc)
-
+            eprint(" with gas assignment")
+            eprint("gas assignments:\n", gc)
     eprint("\n" + "-*" * 40 + "-\n")
 
     #for block in vertices.values():
@@ -735,12 +744,13 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
 
         if not edges[block]:
             all_path.append(current_path.copy())
+            vertices[block].acc_gas[tuple(current_path)] = analysis["gas"]
 
         vertices[block].path_cond[tuple(current_path)] = params.path_conditions_and_vars["path_condition"].copy()
 
         raise e
 
-    vertices[block].gas = analysis["gas"] - prev_block_gas
+    vertices[block].gas.add(analysis["gas"] - prev_block_gas)
 
     if analysis["gas"] >= max_gas:
         # may be multiple routes?
@@ -750,16 +760,15 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
     #if vertices[block].type == "terminal":
     if not edges[block]:
         all_path.append(current_path.copy())
+        vertices[block].acc_gas[tuple(current_path)] = analysis["gas"]
 
     if(analysis["gas_constraints"]):
-        vertices[block].gas_constraints.append(
-                analysis["gas_constraints"].copy())
+        vertices[block].gas_constraints[tuple(current_path)] = \
+                analysis["gas_constraints"].copy()
         analysis["gas_constraints"].clear()
-
 
     # # add block path cond here
     # vertices[block].path_cond = str(params.path_conditions_and_vars["path_condition"])
-
 
     # Mark that this basic block in the visited blocks
     visited.append(block)

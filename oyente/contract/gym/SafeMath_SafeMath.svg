@@ -26,10 +26,10 @@
 <text text-anchor="middle" x="178" y="-190.8" font-family="Times,serif" font-size="14.00" fill="#000000">REVERT </text>
 <text text-anchor="middle" x="178" y="-175.8" font-family="Times,serif" font-size="14.00" fill="#000000">STOP </text>
 <text text-anchor="middle" x="178" y="-144.8" font-family="Times,serif" font-size="14.00" fill="#000000">stack sum: 1</text>
-<text text-anchor="middle" x="178" y="-129.8" font-family="Times,serif" font-size="14.00" fill="#000000">block gas : 26</text>
-<text text-anchor="middle" x="178" y="-114.8" font-family="Times,serif" font-size="14.00" fill="#000000">accumulated gas : 26</text>
+<text text-anchor="middle" x="178" y="-129.8" font-family="Times,serif" font-size="14.00" fill="#000000">block gas : {26}</text>
+<text text-anchor="middle" x="178" y="-114.8" font-family="Times,serif" font-size="14.00" fill="#000000">accumulated gas : {(0,): 26}</text>
 <text text-anchor="middle" x="178" y="-67.8" font-family="Times,serif" font-size="14.00" fill="#000000">========================================</text>
-<text text-anchor="middle" x="178" y="-52.8" font-family="Times,serif" font-size="14.00" fill="#000000">block_constraints1:</text>
+<text text-anchor="middle" x="178" y="-52.8" font-family="Times,serif" font-size="14.00" fill="#000000">path_constraints1:</text>
 <text text-anchor="middle" x="178" y="-37.8" font-family="Times,serif" font-size="14.00" fill="#000000">0 &lt;= Iv,</text>
 <text text-anchor="middle" x="178" y="-22.8" font-family="Times,serif" font-size="14.00" fill="#000000">init_Is &gt;= Iv,</text>
 <text text-anchor="middle" x="178" y="-7.8" font-family="Times,serif" font-size="14.00" fill="#000000">0 &lt;= init_Ia</text>

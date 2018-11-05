@@ -1,6 +1,7 @@
 import graphviz as gv
 import functools
 from opcodes import stack_v
+import pprint
 
 def add_nodes(graph, nodes):
     for n in nodes:
@@ -30,7 +31,7 @@ def cfg_nodes(blocks, lgp, show_cond):
             ['#ffffff', '', '#f4f141'][min((tag in lgp) * 2 + bool(cover), 2)]
     cond = lambda show, cons: ('\n' + '=' * 40 + '\n') + \
             ('\n' + '=' * 40 + '\n').join(cons) if cons and show else ''
-    acc_gas = lambda g: 'accumulated gas : ' + str(g) + '\n\n' if g else ''
+    acc_gas = lambda g: 'accumulated gas : ' + pprint.pformat(g) + '\n\n' if g else ''
 
     # addIdx = lambda inst, addrs: '\n'.join(inst)
     notaddIdx = lambda inst, addrs: \
@@ -42,29 +43,23 @@ def cfg_nodes(blocks, lgp, show_cond):
             for (idx,inst) in zip(addrs, inst)]) \
             if len(inst) == len(addrs) else '\n'.join(inst)
 
-    #print([b for b in blocks if b.start == 3241][0].path_cond)
-    #print("k" * 40)
-    #print(cond(show_cond, ["block_constraints{}:\n{}".format(i + 1, ',\n'.join(map(str, v))) for i, v in enumerate([b for b in blocks if b.start == 3241][0].path_cond.values())]))
-    #input("stop")
-
     return [(str(block.start), \
              { 'label' : \
-                 """%s\naddrs : (%s, %s)\n\n%s\n\n%s\n%s\n%s%s%s%s""" % (
+                 """%s\naddrs : (%s, %s)\n\n%s\n\n%s\n%s\n%s%s%s""" % (
                     block.type,
-                    block.start,
-                    block.end,
+                    block.start, block.end,
                     notaddIdx(block.instructions,
                               block.addrs),
                     "stack sum: " + str(block.stksum),
                     'block gas : ' + str(block.gas),
                     acc_gas(block.acc_gas),
-                    cond(show_cond, ["gas_constraints{}:\n{}".format(i + 1, '\n'.join(v))\
-                            for i, v in enumerate(block.gas_constraints)]),
-                    '\n' + '=' * 40 + "\nacc_gas_constraints:\n" + \
-                    block.acc_gas_constraints \
-                    if block.acc_gas_constraints else '',
+                    cond(show_cond, ["gas_assignment{}:\n{}".format(i + 1, '\n'.join(v))\
+                            for i, v in enumerate(block.gas_constraints.values())]),
+                    # '\n' + '=' * 40 + "\nacc_gas_constraints:\n" + \
+                    # block.acc_gas_constraints \
+                    # if block.acc_gas_constraints else '',
                     cond(show_cond,
-                        ["block_constraints{}:\n{}".format(
+                        ["path_constraints{}:\n{}".format(
                             i + 1,
                             ',\n'.join(map(str, v)))
                                 for i, v in enumerate(block.path_cond.values())])
@@ -75,8 +70,6 @@ def cfg_nodes(blocks, lgp, show_cond):
              }) for block in blocks]
 
 def cfg_edges(es, lgp, p_cond, show_cond):
-    # print(es[3241])
-    # input("cfg stop")
 
     les = list(zip(lgp[:-1], lgp[1:]))
     es = [(b, e) for b in es for e in es[b]]

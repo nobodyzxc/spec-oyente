@@ -6,13 +6,13 @@ class BasicBlock:
         self.end = end_address
         self.instructions = []  # each instruction is a string
         self.jump_target = 0
-        self.gas = 0
-        self.acc_gas = 0
+        self.gas = set()
+        self.acc_gas = {}
         self.path_cond = {}
         # self.inst_gas = []
         self.addrs = []
-        self.gas_constraints = []
-        self.acc_gas_constraints = ""
+        self.gas_constraints = {}
+        # self.acc_gas_constraints = ""
         self.stksum = 0
         self.visited = False
 
