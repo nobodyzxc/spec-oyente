@@ -153,7 +153,7 @@ def main():
     parser.add_argument( "-ce",  "--compilation-error",      help="Display compilation errors", action="store_true")
     parser.add_argument( "-gtc", "--generate-test-cases",    help="Generate test cases each branch of symbolic execution tree", action="store_true")
     parser.add_argument( "-sjo", "--standard-json-output",   help="Support Standard JSON output", action="store_true")
-    parser.add_argument( "-cfg", "--control-flow-graph",   help="Generate CFG marked with upper bound gas", dest="cfg", action="store_true")
+    parser.add_argument( "-cfg", "--control-flow-graph",   help="Generate CFG marked with base gas cost and bring constraints to terminal blocks", dest="cfg", action="store_true")
 
     args = parser.parse_args()
 
