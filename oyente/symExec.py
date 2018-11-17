@@ -72,11 +72,11 @@ def add_cfg_constraints(start, end, cons):
 def initGlobalVars():
 
     # cfg vars
-    global max_gas
-    max_gas = 0
+    # global max_gas
+    # max_gas = 0
 
-    global longest_path
-    longest_path = []
+    # global longest_path
+    # longest_path = []
 
     global all_path
     all_path = []
@@ -261,26 +261,16 @@ def build_cfg_and_analyze():
         full_sym_exec()  # jump targets are constructed on the fly
 
 
-def print_cfg(filename, show_path_cond):
-    # acc_gas = 0
-    # acc_cons = ""
-    #print(longest_path)
-    #print([i for i in vertices])
-    # for lid in longest_path:
-        # acc_gas += vertices[lid].gas
-        # if vertices[lid].gas_constraints:
-        #     acc_cons += '\n + '.join(vertices[lid].gas_constraints[0])
-        # vertices[lid].acc_gas = str(acc_gas)
-        # + (' + gas_constraints' if acc_cons else '')
-        # vertices[lid].acc_gas_constraints = acc_cons
+def print_cfg(filename, args):
+
+    blocks = vertices.values()
 
     create_graph(
-            cfg_nodes(vertices.values(),
-                      longest_path,
-                      show_path_cond),
-            cfg_edges(edges, longest_path,
-                      cfg_path_constraints,
-                      show_path_cond),
+            cfg_nodes(blocks, args.paths),
+            cfg_edges(
+                edges,
+                cfg_path_constraints,
+                args.paths),
             filename)
 
     eprint = lambda *args, **kwargs: print(*args, file=sys.stderr, **kwargs)
@@ -288,8 +278,8 @@ def print_cfg(filename, show_path_cond):
     eprint("block number:", len(vertices.values()))
     eprint("instruction count:", sum([len(b.instructions) for b in vertices.values()]))
     eprint("path count:", len(all_path))
-    eprint("max cost gas:", vertices[longest_path[-1]].acc_gas[tuple(longest_path)])
-    eprint("max cost path:", longest_path)
+    # eprint("max cost gas:", vertices[longest_path[-1]].acc_gas[tuple(longest_path)])
+    # eprint("max cost path:", longest_path)
     ostksum = [sum([vertices[b].stksum for b in p]) for p in all_path]
     eprint("path stack sum (max, min, avg):",
             (max(ostksum), min(ostksum), sum(ostksum) / len(all_path)))
@@ -308,11 +298,11 @@ def print_cfg(filename, show_path_cond):
         gc = [b.gas_constraints for b in bp]
         cons = reduce(lambda a, b:a + b,
                 [g[p] for p, g in zip(step_path, gc) if p in g], [])
-        gc = '\n'.join(cons)
+        gc = '\n'.join(map(str, cons))
         if not gc: eprint("")
         else:
-            eprint(" with gas assignment")
-            eprint("gas assignments:\n", gc)
+            eprint(" + gas constraints")
+            eprint("gas constraints:\n", gc)
     eprint("\n" + "-*" * 40 + "-\n")
 
     #for block in vertices.values():
@@ -471,6 +461,9 @@ def construct_bb():
     for key in end_ins_dict:
         end_address = end_ins_dict[key]
         block = BasicBlock(key, end_address)
+        for i in range(key, end_address + 1):
+            src = g_src_map.get_source_code(i)
+            block.source.append(src)
         if key not in instructions:
             continue
         block.add_instruction(instructions[key])
@@ -658,7 +651,7 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
     global results
     global g_src_map
 
-    global max_gas
+    # global max_gas
     global current_path
     global longest_path
 
@@ -737,10 +730,10 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
         # (JUMP TO UNKNOWN LOCATION)
         # becuase LOC may be dynamic(?)
 
-        if analysis["gas"] >= max_gas:
-            # may be multiple routes?
-            max_gas = analysis["gas"]
-            longest_path = current_path.copy()
+        # if analysis["gas"] >= max_gas:
+        #     # may be multiple routes?
+        #     max_gas = analysis["gas"]
+        #     longest_path = current_path.copy()
 
         if not edges[block]:
             all_path.append(current_path.copy())
@@ -752,10 +745,10 @@ def sym_exec_block(params, block, pre_block, depth, func_call, current_func_name
 
     vertices[block].gas.add(analysis["gas"] - prev_block_gas)
 
-    if analysis["gas"] >= max_gas:
-        # may be multiple routes?
-        max_gas = analysis["gas"]
-        longest_path = current_path.copy()
+    # if analysis["gas"] >= max_gas:
+    #     # may be multiple routes?
+    #     max_gas = analysis["gas"]
+    #     longest_path = current_path.copy()
 
     #if vertices[block].type == "terminal":
     if not edges[block]:
@@ -2663,8 +2656,8 @@ def run(name, args, disasm_file=None, source_file=None, source_map=None):
     global g_source_file
     global g_src_map
     global results
-    global max_gas
-    global longest_path
+    # global max_gas
+    # global longest_path
     global all_path
     global current_path
 
@@ -2682,7 +2675,5 @@ def run(name, args, disasm_file=None, source_file=None, source_map=None):
         closing_message()
         name = name.replace(".sol", '_').replace(':', "")
         name = name[name.rfind('/') + 1:]
-        print_cfg(
-                name,
-                args.paths)
+        print_cfg(name, args)
         return ret

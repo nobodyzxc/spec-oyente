@@ -1,5 +1,6 @@
 import graphviz as gv
 import functools
+from functools import reduce
 from opcodes import stack_v
 import pprint
 
@@ -26,56 +27,102 @@ def create_graph(n, e, filename):
     g.render(filename=filename, cleanup=True)
     return g
 
-def cfg_nodes(blocks, lgp, show_cond):
-    color = lambda tag, cover: \
-            ['#ffffff', '', '#f4f141'][min((tag in lgp) * 2 + bool(cover), 2)]
-    cond = lambda show, cons: ('\n' + '=' * 40 + '\n') + \
-            ('\n' + '=' * 40 + '\n').join(cons) if cons and show else ''
-    acc_gas = lambda g: 'accumulated gas : ' + pprint.pformat(g) + '\n\n' if g else ''
+split_line = '\n' + '=' * 40 + '\n'
 
-    # addIdx = lambda inst, addrs: '\n'.join(inst)
-    notaddIdx = lambda inst, addrs: \
-            '\n'.join(["%s" % inst \
-            for (idx,inst) in zip(addrs, inst)]) \
-            if len(inst) == len(addrs) else '\n'.join(inst)
-    addIdx = lambda inst, addrs: \
-            '\n'.join(["%d:%s" % (idx, inst) \
-            for (idx,inst) in zip(addrs, inst)]) \
-            if len(inst) == len(addrs) else '\n'.join(inst)
+def make_label(block, show_constraints):
+    label = """{}
 
-    return [(str(block.start), \
-             { 'label' : \
-                 """%s\naddrs : (%s, %s)\n\n%s\n\n%s\n%s\n%s%s%s""" % (
-                    block.type,
-                    block.start, block.end,
-                    notaddIdx(block.instructions,
-                              block.addrs),
-                    "stack sum: " + str(block.stksum),
-                    'block gas : ' + str(block.gas),
-                    acc_gas(block.acc_gas),
-                    cond(show_cond, ["gas_assignment{}:\n{}".format(i + 1, '\n'.join(v))\
-                            for i, v in enumerate(block.gas_constraints.values())]),
-                    # '\n' + '=' * 40 + "\nacc_gas_constraints:\n" + \
-                    # block.acc_gas_constraints \
-                    # if block.acc_gas_constraints else '',
-                    cond(show_cond,
-                        ["path_constraints{}:\n{}".format(
-                            i + 1,
-                            ',\n'.join(map(str, v)))
+line number : ({}, {})
+
+{}
+
+stack sum: {}
+block gas: {}
+       """.format(
+               block.type,
+               block.start, block.end,
+               '\n'.join(block.instructions),
+               block.stksum,
+               block.gas)
+
+    if block.acc_gas:
+        label += '\naccumulated gas :\n{}\n'.format(
+                pprint.pformat(block.acc_gas))
+
+    if show_constraints:
+        if block.gas_constraints:
+            label += split_line + split_line.join(         #'\n'.join(v)
+                    ["gas_constraint{}:\n{}".format(i + 1, str(v)) \
+                            for i, v in enumerate(block.gas_constraints.values())])
+        if block.path_cond:
+            label += split_line + split_line.join(
+                    ["path_constraint{}:\n{}".format(
+                            i + 1, ',\n'.join(map(str, v)))
                                 for i, v in enumerate(block.path_cond.values())])
-                    ),
+    if block.source:
+        label += split_line + block.source[-1].replace('\n', '\l') + '\l'
+        # label += split_line + split_line.join(block.source)
+    else:
+        label += split_line + 'no source available'
+    return label
+
+def cfg_nodes(blocks, show_constraints):
+    nodes = [(str(block.start), \
+             { 'label' : make_label(block, show_constraints), \
                 'shape': 'box', \
                 'style': 'filled', \
-                'fillcolor': color(block.start, block.visited),
+                'fillcolor': '' if block.visited else '#ffffff'
              }) for block in blocks]
+    return nodes
 
-def cfg_edges(es, lgp, p_cond, show_cond):
+def mark_long_node(path, nodes):
+    for i, node in enumerate(nodes):
+        if int(node[0]) in path:
+            nodes[i][1]['fillcolor'] = '#f4f141'
+    return nodes
 
-    les = list(zip(lgp[:-1], lgp[1:]))
-    es = [(b, e) for b in es for e in es[b]]
+def mark_weak_node(blocks, nodes):
+    for i, (block, node) in \
+            enumerate(zip(blocks, nodes)):
+        if block.weakness:
+            nodes[i][1]['fillcolor'] = '#f44242'
+            nodes[i][1]['label'] = 'weakness: {}\n\n{}\n'.format(
+                    str(block.weakness), nodes[i][1]['label'])
+    return nodes
+
+def draw_long_edge(path, edges):
+    path_edges = list(zip(path[:-1], path[1:]))
+    for i, edge in enumerate(edges):
+        (b, e) = edge[0]
+        b, e = int(b), int(e)
+        if (b, e) in path_edges:
+            edges[i][1]['color'] = 'red'
+    return edges
+
+def draw_weak_edge(blocks, paths, edges):
+    weak_blocks = set(block.start \
+            for block in blocks if block.weakness)
+    weak_paths = [path for path in paths \
+            if any([b in weak_blocks for b in path])]
+    weak_edges = set()
+    for path in weak_paths:
+        path_edges = list(zip(path[:-1], path[1:]))
+        for edge in path_edges:
+            weak_edges.add(edge)
+
+    for i, edge in enumerate(edges):
+        (b, e) = edge[0]
+        b, e = int(b), int(e)
+        if (b, e) in weak_edges:
+            edges[i][1]['color'] = 'red'
+    return edges
+
+def cfg_edges(edges, p_cond, show_cond):
+
+    edges = [(b, e) for b in edges for e in edges[b]]
 
     return [((str(b), str(e)),
             {'label' : ('\n' + '=' * 40 + '\n').join(p_cond.get((b, e), [])) \
                     if show_cond else '',
-             'color': 'red' if (b, e) in les else 'blue'
-            }) for (b, e) in es]
+             'color': 'blue'
+            }) for (b, e) in edges]
