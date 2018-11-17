@@ -263,15 +263,16 @@ def build_cfg_and_analyze():
 
 def print_cfg(filename, args):
 
-    blocks = vertices.values()
+    if args.cfg:
+        blocks = vertices.values()
 
-    create_graph(
-            cfg_nodes(blocks, args.paths),
-            cfg_edges(
-                edges,
-                cfg_path_constraints,
-                args.paths),
-            filename)
+        create_graph(
+                cfg_nodes(blocks, args.paths),
+                cfg_edges(
+                    edges,
+                    cfg_path_constraints,
+                    args.paths),
+                filename)
 
     eprint = lambda *args, **kwargs: print(*args, file=sys.stderr, **kwargs)
 

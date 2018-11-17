@@ -153,9 +153,7 @@ def main():
     parser.add_argument( "-ce",  "--compilation-error",      help="Display compilation errors", action="store_true")
     parser.add_argument( "-gtc", "--generate-test-cases",    help="Generate test cases each branch of symbolic execution tree", action="store_true")
     parser.add_argument( "-sjo", "--standard-json-output",   help="Support Standard JSON output", action="store_true")
-    parser.add_argument( "-cfg", "--control-flow-graph",   help="Generate control flow graph", dest="cfg", action="store_true")
-    parser.add_argument( "-cfg-weak", "--cfg-weak",   help="Generate control flow graph mark with weak paths", dest="cfg_weak", action="store_true")
-    parser.add_argument( "-cfg-gas", "--cfg-gas",   help="Generate control flow graph mark with max gas cost path", dest="cfg_gas", action="store_true")
+    parser.add_argument( "-cfg", "--control-flow-graph",   help="Generate CFG marked with upper bound gas", dest="cfg", action="store_true")
 
     args = parser.parse_args()
 
